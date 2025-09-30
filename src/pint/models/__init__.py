@@ -47,6 +47,7 @@ from pint.models.noise_model import (
     PLDMNoise,
     PLSWNoise,
     PLRedNoise,
+    RidgeSWNoise,
     ScaleToaError,
     ScaleDmError,
 )

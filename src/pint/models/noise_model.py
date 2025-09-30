@@ -1193,6 +1193,109 @@ class PLRedNoise(CorrelatedNoiseComponent):
         return np.dot(Fmat * phi[None, :], Fmat.T)
 
 
+class RidgeSWNoise(NoiseComponent):
+    """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
+
+    register = True
+    category = "ridge_SW_noise"
+
+    introduces_correlated_errors = True
+    introduces_dm_errors = True
+    is_time_correlated = True
+
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+        self.add_param(
+            floatParameter(
+                name="SWDT",
+                units="",
+                aliases=[],
+                description="Linear interpolation time step for time-domain DM noise.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="SWLOGSIG",
+                units="",
+                aliases=[],
+                description="Amplitude of time-domain SW noise" " ridge kernel.",
+                convert_tcb2tdb=False,
+            )
+        )
+
+        self.covariance_matrix_funcs += [self.ridge_sw_cov_matrix]
+        self.basis_funcs += [self.ridge_sw_basis_weight_pair]
+
+    def get_ridge_vals(self) -> Tuple[float, float, float]:
+        """
+        Retrieve ridge regression and time-domain parameters
+        from the model, substituting defaults if unspecified.
+        """
+        if self.TNDMDT.value is None:
+            log.warning(
+                "SWDT is not set, using default value of 30 days for RidgeDMNoise"
+            )
+            dt = 30.0
+        else:
+            dt = self.DMDT.value
+
+        if self.SWLOGSIG.value is not None:
+            log10_sigma = self.SWLOGSIG.value
+        else:
+            raise ValueError("SWDT and SWLOGSIG must be set for RidgeSWNoise")
+
+        return log10_sigma, dt
+
+    def get_noise_basis(self, toas: TOAs) -> np.ndarray:
+        """Return a chromatic linear interpolation matrix for RidgeDMNoise.
+        See the documentation for ridge_sw_basis_weight_pair function for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        fref = 1400 * u.MHz
+        freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
+
+        _, dt = self.get_ridge_vals()
+        Umat, _ = linear_interp_basis(t, dt=dt * 86400)
+        # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
+        solar_wind_geometry = self._parent.solar_wind_geometry(toas)
+        # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
+        dt_DM = (solar_wind_geometry * DMconst / (freqs**2)).value
+
+        return Umat * dt_DM[:, None]
+
+    def get_noise_weights(self, toas: TOAs) -> np.ndarray:
+        """Return ridge regression time domain SW DM noise weights.
+        See the documentation for ridge_sw_basis_weight_pair for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        log10_sigma, dt = self.get_ridge_vals()
+        _, avetoas = linear_interp_basis(t, dt=dt * 86400)
+
+        return ridge_kernel(avetoas, log10_sigma)
+
+    def ridge_sw_basis_weight_pair(self, toas: TOAs) -> Tuple[np.ndarray, np.ndarray]:
+        """Return a chromatic, geometric linear interpolation basis and ridge sw noise weights.
+        Uses solar wind linear interpolation basis in the time domain to model dispersive delays.
+        Time domain GPs have associated covariance functions which are priors over functions.
+        The ridge regression or white noise covariance function is a common choice for modeling
+        smooth functions. It is defined as:
+        .. math::
+            K(t_i, t_j) = \\sigma^2 * \\delta(t_i - t_j)
+        where :math:`\\sigma` is the amplitude of the noise, and :math:`\\delta(t_i - t_j)` is a delta function.
+        """
+        return (self.get_noise_basis(toas), self.get_noise_weights(toas))
+
+    def ridge_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
+        Umat, phi = self.ridge_sw_basis_weight_pair(toas)
+        return np.dot(Umat * phi, Umat.T)
+
+
 def get_ecorr_epochs(toas_table: np.ndarray, dt: float = 1, nmin: int = 2) -> List[int]:
     """Find only epochs with more than 1 TOA for applying ECORR."""
     if len(toas_table) == 0:
@@ -1379,3 +1482,36 @@ def powerlaw(
 
     fyr = (1 / u.year).to_value(u.Hz)
     return A**2 / 12.0 / np.pi**2 * fyr ** (gamma - 3) * f ** (-gamma) * above_fl
+
+
+def linear_interp_basis(
+    toas,
+    dt: float = 30. * 86400):
+    """Provides a basis for linear interpolation.
+    :param toas: Pulsar TOAs in seconds
+    :param dt: Linear interpolation step size in seconds.
+    :returns: Linear interpolation basis and nodes
+    """
+
+    # evenly spaced points
+    x = np.arange(toas.min(), toas.max() + dt, dt)
+    M = np.zeros((len(toas), len(x)))
+
+    # make linear interpolation basis
+    for ii in range(len(x) - 1):
+        idx = np.logical_and(toas >= x[ii], toas <= x[ii + 1])
+        M[idx, ii] = (toas[idx] - x[ii + 1]) / (x[ii] - x[ii + 1])
+        M[idx, ii + 1] = (toas[idx] - x[ii]) / (x[ii + 1] - x[ii])
+
+    # only return non-zero columns
+    idx = M.sum(axis=0) != 0
+
+    return M[:, idx], x[idx]
+
+def ridge_kernel(
+        avetoas,
+        log10_sigma: float = -7.
+):
+    """Ridge regression kernel"""
+    sigma = 10**log10_sigma
+    return sigma**2 * np.ones_like(avetoas)
