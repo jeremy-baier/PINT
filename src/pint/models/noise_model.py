@@ -1210,19 +1210,37 @@ class RidgeSWNoise(NoiseComponent):
 
         self.add_param(
             floatParameter(
-                name="SWDT",
+                name="SWDTCoarse",
+                units="d",
+                aliases=[],
+                description="Coarse interpolation time step for time-domain SW noise off solar conjunction.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="SWDTFine",
+                units="d",
+                aliases=[],
+                description="Fine linear interpolation time step for time-domain SW noise near solar conjunction.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="SWConjWindow",
                 units="",
                 aliases=[],
-                description="Linear interpolation time step for time-domain DM noise.",
+                description="Window of time to model solar DM with finer gridding centered on conjunction.",
                 convert_tcb2tdb=False,
             )
         )
         self.add_param(
             floatParameter(
                 name="SWLOGSIG",
-                units="",
+                units="",  # log10(s)
                 aliases=[],
-                description="Amplitude of time-domain SW noise" " ridge kernel.",
+                description="Log10 Amplitude of time-domain SW noise with the ridge kernel.",
                 convert_tcb2tdb=False,
             )
         )
@@ -1230,25 +1248,39 @@ class RidgeSWNoise(NoiseComponent):
         self.covariance_matrix_funcs += [self.ridge_sw_cov_matrix]
         self.basis_funcs += [self.ridge_sw_basis_weight_pair]
 
-    def get_ridge_vals(self) -> Tuple[float, float, float]:
+    def get_ridge_vals(self) -> Tuple[float, float, float, float]:
         """
         Retrieve ridge regression and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        if self.TNDMDT.value is None:
+        if self.SWDTFine.value is None:
             log.warning(
-                "SWDT is not set, using default value of 30 days for RidgeDMNoise"
+                "SWDTFine is not set, using default value of 7.0 days for RidgeSWNoise"
             )
-            dt = 30.0
+            dt_fine = 7.0
         else:
-            dt = self.DMDT.value
+            dt = self.SWDTFine.value
+        if self.SWDTCoarse.value is None:
+            log.warning(
+                "SWDTCoarse is not set, using default value of 180 days for RidgeSWNoise"
+            )
+            dt_coarse = 180.
+        else:
+            dt_coarse = self.SWDTCoarse.value
+        if self.SWConjWindow.value is None:
+            log.warning(
+                "SWConjWindow is not set, using default value of 180.0 days for RidgeSWNoise"
+            )
+            conjunction_window = 180.0
+        else:
+            conjunction_window = self.SWConjWindow.value
 
         if self.SWLOGSIG.value is not None:
             log10_sigma = self.SWLOGSIG.value
         else:
-            raise ValueError("SWDT and SWLOGSIG must be set for RidgeSWNoise")
+            raise ValueError("SWLOGSIG must be set for RidgeSWNoise")
 
-        return log10_sigma, dt
+        return log10_sigma, dt_fine, dt_coarse, conjunction_window
 
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
         """Return a chromatic linear interpolation matrix for RidgeDMNoise.
@@ -1259,8 +1291,15 @@ class RidgeSWNoise(NoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        _, dt = self.get_ridge_vals()
-        Umat, _ = linear_interp_basis(t, dt=dt * 86400)
+        solar_conjunctions = 
+        _, dt_fine, dt_coarse, conjunction_window = self.get_ridge_vals()
+        Umat, _ = solar_conjunctions_interpolation_basis(
+                t,
+                solar_conjunctions,
+                dt_fine * 86400,  # days to seconds for all these
+                dt_coarse * 86400,
+                conjunction_window * 86400,
+                )
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1486,7 +1525,8 @@ def powerlaw(
 
 def linear_interp_basis(
     toas,
-    dt: float = 30. * 86400):
+    dt: float = 30. * 86400
+):
     """Provides a basis for linear interpolation.
     :param toas: Pulsar TOAs in seconds
     :param dt: Linear interpolation step size in seconds.
@@ -1507,6 +1547,75 @@ def linear_interp_basis(
     idx = M.sum(axis=0) != 0
 
     return M[:, idx], x[idx]
+
+def get_solar_conjunctions(
+        toas,
+        planetssb,
+        sunssb,
+        pos_t,
+        extend: bool = False
+):
+    """
+    Get (approximate) SW conjunctions based off the closest approach of the dataset.
+    :param toas: vector of time series in seconds
+    :param planetssb: solar system barycenter positions
+    :param pos_t: pulsar position as 3-vector
+    :param extend: whether or not to add a solar conjunction on the begining/end to encapsulate data.
+
+    :return: Tc: SW conjunctions
+    """
+
+    theta, R_earth, _, _ = ee_sw.theta_impact(planetssb, sunssb, pos_t)
+    # Estimate conjunction times using TOA of closest approach
+    toa_min_theta = toas[np.argmin(theta)]
+    #Tc = toa_min_theta + 0.5*(np.arange(1000)*const.yr - 500*const.yr) + 0.25*const.yr # This might break after the NANOGrav 50 yr dataset
+    Tc = toa_min_theta + np.arange(100)*const.yr - 50*const.yr  # This might break after the NANOGrav 50 yr dataset
+    if extend: # extend past the first/last conjuctions by a year in each direction to catch all toas in the range
+        Tc = Tc[(Tc > np.min(toas-const.yr))*(Tc < np.max(toas+const.yr))]
+    elif not extend:
+        Tc = Tc[(Tc > np.min(toas))*(Tc < np.max(toas))]
+    return Tc
+
+def solar_conjunctions_interpolation_basis(
+        toas,
+        tcs,
+        dt_near_conjunction: float = 6.5 * 86400.,
+        dt_off_conjunction: float = 0.5*const.yr,
+        window_near_conjunction: float = 0.25*const.yr,
+):
+    half_window_near_conjunction=0.5*window_near_conjunction
+    tcs = get_solar_conjunctions(psr.toas, psr.planetssb, psr.sunssb, psr.pos_t, extend=True)
+    bin_edges = []
+    # get bin edges
+    for tc in tcs:
+        # first get finer binned edges near solar conjunction
+        edges_near_conjunction = np.arange(
+            tc-half_window_near_conjunction,
+            tc+half_window_near_conjunction,
+            dt_near_conjunction
+        )
+        # then get coarser binned edges off solar conjunction
+        bin_edges.append(edges_near_conjunction)
+        edges_off_conjunction = np.arange(
+            tc+half_window_near_conjunction,
+            tc+const.yr-half_window_near_conjunction,
+            dt_off_conjunction
+        )
+        bin_edges.append(edges_off_conjunction)
+    bin_edges = np.sort(np.concatenate(bin_edges))
+
+    M = np.zeros((len(toas), len(bin_edges)))
+
+    # make linear interpolation basis
+    for ii in range(len(bin_edges) - 1):
+        idx = np.logical_and(toas >= bin_edges[ii], toas <= bin_edges[ii + 1])
+        M[idx, ii] = (toas[idx] - bin_edges[ii + 1]) / (bin_edges[ii] - bin_edges[ii + 1])
+        M[idx, ii + 1] = (toas[idx] - bin_edges[ii]) / (bin_edges[ii + 1] - bin_edges[ii])
+
+    # only return non-zero columns for rank reduction
+    idx = M.sum(axis=0) != 0
+
+    return M[:, idx], bin_edges[idx]
 
 def ridge_kernel(
         avetoas,
