@@ -343,6 +343,30 @@ class SolarWindDispersion(SolarWindDispersionBase):
                 description="Solar Wind Model (0 is from Edwards+ 2006, 1 is from You+2007,2012/Hazboun+ 2022)",
             )
         )
+        self.add_param(
+            intParameter(
+                name="NE_SW_SINE_PERIOD",
+                value=11.0,
+                units="years",
+                description="Period of sine variation in solar electron density (years)",
+            )
+        )
+        self.add_param(
+            intParameter(
+                name="NE_SW_SINE_PHASE",
+                value=0.0,
+                units="days",
+                description="Phase offset from SWEPOCH in solar electron density (days)",
+            )
+        )
+        self.add_param(
+            intParameter(
+                name="NE_SW_SINE_AMP",
+                value=0.0,
+                units="1/cm^3",
+                description="Amplitude of sine variation in solar electron density (1/cm^3)",
+            )
+        )
         self.dm_value_funcs += [self.solar_wind_dm]
         self.delay_funcs_component += [self.solar_wind_delay]
         self.set_special_params(["NE_SW", "SWM", "SWP"])
@@ -414,9 +438,11 @@ class SolarWindDispersion(SolarWindDispersionBase):
             Hazboun et al. 2022
         """
         ne_sw_terms = self.get_NE_SW_terms()
+        ne_sine_params = {}
 
         if len(ne_sw_terms) == 1:
             ne_sw = self.NE_SW.quantity * np.ones(len(toas))
+        
         else:
             if any(t.value != 0 for t in ne_sw_terms[1:]):
                 SWEPOCH = self.SWEPOCH.value
