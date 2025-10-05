@@ -8,7 +8,7 @@ import astropy.units as u
 import numpy as np
 from loguru import logger as log
 
-from pint import DMconst, dmu
+from pint import DMconst, dmu, yr
 from pint.models.parameter import Parameter, floatParameter, intParameter, maskParameter
 from pint.models.timing_model import Component
 from pint.toa import TOAs
@@ -1291,7 +1291,7 @@ class RidgeSWNoise(NoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        solar_conjunctions = 
+        # solar_conjunctions = 
         _, dt_fine, dt_coarse, conjunction_window = self.get_ridge_vals()
         Umat, _ = solar_conjunctions_interpolation_basis(
                 t,
@@ -1568,10 +1568,10 @@ def get_solar_conjunctions(
     theta, R_earth, _, _ = ee_sw.theta_impact(planetssb, sunssb, pos_t)
     # Estimate conjunction times using TOA of closest approach
     toa_min_theta = toas[np.argmin(theta)]
-    #Tc = toa_min_theta + 0.5*(np.arange(1000)*const.yr - 500*const.yr) + 0.25*const.yr # This might break after the NANOGrav 50 yr dataset
-    Tc = toa_min_theta + np.arange(100)*const.yr - 50*const.yr  # This might break after the NANOGrav 50 yr dataset
+    #Tc = toa_min_theta + 0.5*(np.arange(1000)*yr - 500*yr) + 0.25*yr # This might break after the NANOGrav 50 yr dataset
+    Tc = toa_min_theta + np.arange(100)*yr - 50*yr  # This might break after the NANOGrav 50 yr dataset
     if extend: # extend past the first/last conjuctions by a year in each direction to catch all toas in the range
-        Tc = Tc[(Tc > np.min(toas-const.yr))*(Tc < np.max(toas+const.yr))]
+        Tc = Tc[(Tc > np.min(toas-yr))*(Tc < np.max(toas+yr))]
     elif not extend:
         Tc = Tc[(Tc > np.min(toas))*(Tc < np.max(toas))]
     return Tc
@@ -1580,8 +1580,8 @@ def solar_conjunctions_interpolation_basis(
         toas,
         tcs,
         dt_near_conjunction: float = 6.5 * 86400.,
-        dt_off_conjunction: float = 0.5*const.yr,
-        window_near_conjunction: float = 0.25*const.yr,
+        dt_off_conjunction: float = 0.5*yr,
+        window_near_conjunction: float = 0.25*yr,
 ):
     half_window_near_conjunction=0.5*window_near_conjunction
     tcs = get_solar_conjunctions(psr.toas, psr.planetssb, psr.sunssb, psr.pos_t, extend=True)
@@ -1598,7 +1598,7 @@ def solar_conjunctions_interpolation_basis(
         bin_edges.append(edges_near_conjunction)
         edges_off_conjunction = np.arange(
             tc+half_window_near_conjunction,
-            tc+const.yr-half_window_near_conjunction,
+            tc+yr-half_window_near_conjunction,
             dt_off_conjunction
         )
         bin_edges.append(edges_off_conjunction)
