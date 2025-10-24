@@ -1578,13 +1578,19 @@ def get_solar_conjunctions(
 
 def solar_conjunctions_interpolation_basis(
         toas,
+        planetssb,
+        sunssb,
+        pos_t,
         tcs,
-        dt_near_conjunction: float = 6.5 * 86400.,
-        dt_off_conjunction: float = 0.5*yr,
-        window_near_conjunction: float = 0.25*yr,
+        dt_near_conjunction: float = 6.5,
+        dt_off_conjunction: float = 180.,
+        window_near_conjunction: float = 0.25,
 ):
-    half_window_near_conjunction=0.5*window_near_conjunction
-    tcs = get_solar_conjunctions(psr.toas, psr.planetssb, psr.sunssb, psr.pos_t, extend=True)
+    half_window_near_conjunction=0.5*window_near_conjunction*u.day.to('s') # days to seconds
+    dt_near_conjunction=dt_near_conjunction*u.day.to('s') # days to seconds
+    dt_off_conjunction=dt_off_conjunction*u.day.to('s') # days to seconds
+
+    tcs = get_solar_conjunctions(toas, planetssb, sunssb, pos_t, extend=True)
     bin_edges = []
     # get bin edges
     for tc in tcs:
