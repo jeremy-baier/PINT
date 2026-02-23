@@ -49,6 +49,9 @@ from pint.models.noise_model import (
     PLRedNoise,
     ScaleToaError,
     ScaleDmError,
+    SqExpSWNoise,
+    QuasiPeriodicSWNoise,
+    RidgeSWNoise,
 )
 from pint.models.phase_offset import PhaseOffset
 from pint.models.piecewise import PiecewiseSpindown
