@@ -1341,7 +1341,7 @@ class GLSState(ModelState):
             M, params, units = self.model.full_designmatrix(self.fitter.toas)
             M, norm = normalize_designmatrix(M, params)
             phi = self.model.full_basis_weight(self.fitter.toas)
-            phiinv = get_normalized_prior_precision(phi, norm)
+            phiinv = get_phiinv(phi, norm)
             Nvec = (
                 self.model.scaled_toa_uncertainty(self.fitter.toas).to_value(u.s) ** 2
             )
@@ -1528,7 +1528,7 @@ class WidebandState(ModelState):
                     phiinv[n_tm:] = 1 / phi
                 else:
                     phiinv = np.zeros((M.shape[1], M.shape[1]))
-                    phiinv[n_tm:, n_tm:] = np.linalg.inv(phi)
+                    phiinv[n_tm:, n_tm:] = get_phiinv(phi)
 
         # normalize the design matrix
         norm = np.sqrt(np.sum(M**2, axis=0))
@@ -2020,7 +2020,7 @@ class GLSFitter(Fitter):
                 M, params, units = self.model.full_designmatrix(self.toas)
                 M, norm = normalize_designmatrix(M, params)
                 phi = self.model.full_basis_weight(self.toas)
-                phiinv = get_normalized_prior_precision(phi, norm)
+                phiinv = get_phiinv(phi)
                 Nvec = self.model.scaled_toa_uncertainty(self.toas).to(u.s).value ** 2
                 mtcm, mtcy = get_gls_mtcm_mtcy(phiinv, Nvec, M, residuals)
 
@@ -2330,7 +2330,7 @@ class WidebandTOAFitter(Fitter):  # Is GLSFitter the best here?
                         phiinv[n_tm:] = 1 / phi
                     else:
                         phiinv = np.zeros((M.shape[1], M.shape[1]))
-                        phiinv[n_tm:, n_tm:] = np.linalg.inv(phi)
+                        phiinv[n_tm:, n_tm:] = get_phiinv(phi)
 
             ntmpar = self.model.ntmpar
 
@@ -2745,16 +2745,25 @@ def get_gls_mtcm_mtcy(
     return mtcm, mtcy
 
 
-def get_normalized_prior_precision(phi: np.ndarray, norm: np.ndarray) -> np.ndarray:
-    """Return prior precision in normalized-parameter coordinates.
-
-    If x are original parameters and z are normalized parameters with
-    x = z / norm, this returns Pz = Norm^{-1} Px Norm^{-1}.
+def get_phiinv(phi: np.ndarray, norm: np.ndarray) -> np.ndarray:
+    """Invert the phi matrix in a stable way.
+    We relegate phi to double precision before inverting because we don't care about the precision of the noise parameters,
+    and this allows us to use the more stable double precision Cholesky decomposition for inversion.
+    Uses Cholesky-based inversion for SPD covariance matrices, with fallback to
+    direct inversion when Cholesky fails.
     """
     if np.ndim(phi) == 1:
         return 1 / phi / norm**2
-
-    phiinv = np.linalg.inv(phi)
+    arr = np.asarray(phi)
+    if arr.dtype == np.longdouble:
+        arr = arr.astype(np.float64)
+    elif np.issubdtype(arr.dtype, np.clongdouble):
+        arr = arr.astype(np.complex128)
+    try:
+        cf = scipy.linalg.cho_factor(arr, lower=True)
+        phiinv = scipy.linalg.cho_solve(cf, np.eye(arr.shape[0], dtype=arr.dtype))
+    except scipy.linalg.LinAlgError:
+        phiinv = np.linalg.inv(arr)
     return (phiinv / norm).T / norm
 
 
