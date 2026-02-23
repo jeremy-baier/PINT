@@ -10,7 +10,13 @@ from scipy import interpolate
 from loguru import logger as log
 
 from pint import DMconst, dmu
-from pint.models.parameter import Parameter, floatParameter, intParameter, maskParameter
+from pint.models.parameter import (
+    Parameter,
+    floatParameter,
+    intParameter,
+    maskParameter,
+    prefixParameter,
+)
 from pint.models.timing_model import Component
 from pint.toa import TOAs
 
@@ -1226,6 +1232,16 @@ class RidgeSWNoise(NoiseComponent):
             )
         )
         self.add_param(
+            prefixParameter(
+                name="TDSWNODE_0001",
+                units="day",
+                value=None,
+                description="Interpolation node for time-domain SW noise basis (MJD).",
+                parameter_type="float",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
             floatParameter(
                 name="TDSWLOGSIG",
                 units="s",
@@ -1265,6 +1281,54 @@ class RidgeSWNoise(NoiseComponent):
 
         return log10_sigma, dt
 
+    def validate(self):
+        super().validate()
+
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        node_values = []
+        for _, node_name in node_map.items():
+            node_val = getattr(self, node_name).value
+            if node_val is not None:
+                node_values.append(float(node_val))
+
+        if 0 < len(node_values) < 2:
+            raise ValueError(
+                "RidgeSWNoise requires at least 2 TDSWNODE_ values when using "
+                "node-based interpolation. Set >=2 TDSWNODE_ parameters, or "
+                "leave all TDSWNODE_ values unset to use TDSWDT spacing."
+            )
+
+        if len(node_values) >= 2:
+            nodes = np.asarray(node_values, dtype=float)
+            if not np.all(np.isfinite(nodes)):
+                raise ValueError("RidgeSWNoise TDSWNODE_ values must be finite.")
+            if len(np.unique(nodes)) != len(nodes):
+                raise ValueError("RidgeSWNoise TDSWNODE_ values must be unique.")
+        else:
+            if self.TDSWDT.value is None or self.TDSWDT.value <= 0:
+                raise ValueError("RidgeSWNoise TDSWDT must be set to a positive value.")
+
+    def _get_ridge_nodes(self, toas: TOAs) -> np.ndarray:
+        """Return interpolation nodes in MJD for RidgeSWNoise."""
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        nodes = []
+        for _, node_name in node_map.items():
+            node_par = getattr(self, node_name)
+            if node_par.value is not None:
+                nodes.append(float(node_par.value))
+
+        if len(nodes) >= 2:
+            return np.array(sorted(nodes), dtype=float)
+
+        _, dt = self.get_ridge_vals()
+        log.warning(
+            "RidgeSWNoise has fewer than 2 TDSWNODE_ parameters set; "
+            "falling back to legacy TDSWDT spacing."
+        )
+        t = (toas.table["tdbld"].quantity * u.day).to(u.s).value
+        t_min, t_max = np.min(t) / 86400.0, np.max(t) / 86400.0
+        return np.arange(t_min, t_max + dt, dt)
+
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
         """Return a chromatic linear interpolation matrix for RidgeSWNoise.
 
@@ -1275,8 +1339,8 @@ class RidgeSWNoise(NoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        _, dt = self.get_ridge_vals()
-        Umat, _ = linear_interpolation_basis(t, dt=30 * 86400)
+        nodes = self._get_ridge_nodes(toas)
+        Umat, _ = linear_interpolation_basis(t, nodes=nodes)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1291,8 +1355,9 @@ class RidgeSWNoise(NoiseComponent):
         tbl = toas.table
         t = (tbl["tdbld"].quantity * u.day).to(u.s).value
 
-        log10_sigma, dt = self.get_ridge_vals()
-        _, nodes = linear_interpolation_basis(t, dt=30 * 86400)
+        log10_sigma, _ = self.get_ridge_vals()
+        nodes_in = self._get_ridge_nodes(toas)
+        _, nodes = linear_interpolation_basis(t, nodes=nodes_in)
 
         return ridge_kernel(nodes, log10_sigma)
 
