@@ -1676,7 +1676,7 @@ class TimingModel:
         N = np.diag(self.scaled_toa_uncertainty(toas).to_value(u.s) ** 2)
         U = self.noise_model_designmatrix(toas)
         Phi = self.noise_model_basis_weight(toas)
-        return N + np.dot(U * Phi[None, :], U.T) if U is not None else N
+        return N + self._project_basis_covariance(U, Phi) if U is not None else N
 
     def dm_covariance_matrix(self, toas: TOAs) -> np.ndarray:
         """Get the DM covariance matrix for the noise model. The matrix elements have
@@ -1711,7 +1711,31 @@ class TimingModel:
         N = np.diag(self.scaled_wideband_uncertainty(toas) ** 2)
         U = self.noise_model_wideband_designmatrix(toas)
         Phi = self.noise_model_basis_weight(toas)
-        return N + np.dot(U * Phi[None, :], U.T) if U is not None else N
+        return N + self._project_basis_covariance(U, Phi) if U is not None else N
+
+    @staticmethod
+    def _project_basis_covariance(U: np.ndarray, Phi: np.ndarray) -> np.ndarray:
+        """Project basis-space covariance to data-space covariance.
+
+        Supports both diagonal basis covariance (1D vector of variances) and
+        full basis covariance (2D matrix).
+        """
+        if np.ndim(Phi) == 1:
+            return np.dot(U * Phi[None, :], U.T)
+        return np.dot(U, np.dot(Phi, U.T))
+
+    @staticmethod
+    def _block_diag(matrices: List[np.ndarray]) -> np.ndarray:
+        """Construct a dense block-diagonal matrix from square blocks."""
+        size = sum(mat.shape[0] for mat in matrices)
+        dtype = np.result_type(*[mat.dtype for mat in matrices])
+        out = np.zeros((size, size), dtype=dtype)
+        start = 0
+        for mat in matrices:
+            stop = start + mat.shape[0]
+            out[start:stop, start:stop] = mat
+            start = stop
+        return out
 
     def scaled_toa_uncertainty(self, toas: TOAs) -> u.Quantity:
         """Get the scaled TOA data uncertainties noise models.
@@ -1857,14 +1881,23 @@ class TimingModel:
         return (M, par, M_units, Md_units)
 
     def noise_model_basis_weight(self, toas: TOAs) -> np.ndarray:
-        """Returns the joint weight vector for all noise components."""
+        """Returns the joint basis covariance for all noise components.
+
+        Returns a 1D vector when all components provide diagonal basis-space
+        covariance, otherwise returns a 2D block-diagonal covariance matrix.
+        """
         if len(self.basis_funcs) == 0:
             return None
         result = [nf(toas)[1] for nf in self.basis_funcs]
-        return np.hstack(list(result))
+        has_matrix = any(np.ndim(phi) == 2 for phi in result)
+        if not has_matrix:
+            return np.hstack(list(result))
+
+        blocks = [np.diag(phi) if np.ndim(phi) == 1 else phi for phi in result]
+        return self._block_diag(blocks)
 
     def full_basis_weight(self, toas: TOAs) -> np.ndarray:
-        """Returns the joint weight vector for all timing and noise components.
+        """Returns the joint basis covariance for timing and noise components.
         The weights of the timing model parameters are set to be a large constant,
         representing an uninformative prior."""
         noise_params = self.get_params_of_component_type("NoiseComponent")
@@ -1875,8 +1908,12 @@ class TimingModel:
         # The number 1e40 is chosen to be consistent with ENTERPRISE.
         phi_tm = np.ones(npar_tm) * 1e40
         phi_nm = self.noise_model_basis_weight(toas)
+        if phi_nm is None:
+            return phi_tm
+        if np.ndim(phi_nm) == 1:
+            return np.hstack((phi_tm, phi_nm))
 
-        return np.hstack((phi_tm, phi_nm)) if phi_nm is not None else phi_tm
+        return self._block_diag([np.diag(phi_tm), phi_nm])
 
     def noise_model_dimensions(self, toas: TOAs) -> Dict[str, Tuple[int, int]]:
         """Number of basis functions for each noise model component.
@@ -1897,7 +1934,7 @@ class TimingModel:
                 bfs = nc.basis_funcs
                 if len(bfs) == 0:
                     continue
-                nbf = sum(len(bf(toas)[1]) for bf in bfs)
+                nbf = sum(bf(toas)[1].shape[0] for bf in bfs)
                 result[nc.category] = (ntot, nbf)
                 ntot += nbf
 

@@ -77,6 +77,13 @@ class CorrelatedNoiseComponent(NoiseComponent):
         return np.vstack((M_toa, M_dm))
 
 
+def project_basis_covariance(U: np.ndarray, Phi: np.ndarray) -> np.ndarray:
+    """Project basis-space covariance to data-space covariance."""
+    if np.ndim(Phi) == 1:
+        return np.dot(U * Phi[None, :], U.T)
+    return np.dot(U, np.dot(Phi, U.T))
+
+
 class ScaleToaError(WhiteNoiseComponent):
     """Correct the reported TOA uncertainties. The corrections account for
     imperfections in the TOA measurement and pulse jitter.
@@ -654,7 +661,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
 
     def pl_dm_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Fmat, phi = self.pl_dm_basis_weight_pair(toas)
-        return np.dot(Fmat * phi[None, :], Fmat.T)
+        return project_basis_covariance(Fmat, phi)
 
 
 class PLSWNoise(CorrelatedNoiseComponent):
@@ -818,7 +825,7 @@ class PLSWNoise(CorrelatedNoiseComponent):
 
     def pl_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Fmat, phi = self.pl_sw_basis_weight_pair(toas)
-        return np.dot(Fmat * phi[None, :], Fmat.T)
+        return project_basis_covariance(Fmat, phi)
 
 
 class PLChromNoise(CorrelatedNoiseComponent):
@@ -999,7 +1006,7 @@ class PLChromNoise(CorrelatedNoiseComponent):
 
     def pl_chrom_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Fmat, phi = self.pl_chrom_basis_weight_pair(toas)
-        return np.dot(Fmat * phi[None, :], Fmat.T)
+        return project_basis_covariance(Fmat, phi)
 
 
 class PLRedNoise(CorrelatedNoiseComponent):
@@ -1191,7 +1198,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
 
     def pl_rn_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Fmat, phi = self.pl_rn_basis_weight_pair(toas)
-        return np.dot(Fmat * phi[None, :], Fmat.T)
+        return project_basis_covariance(Fmat, phi)
 
 class RidgeSWNoise(NoiseComponent):
     """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
@@ -1297,7 +1304,7 @@ class RidgeSWNoise(NoiseComponent):
 
     def ridge_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Umat, phi = self.ridge_sw_basis_weight_pair(toas)
-        return np.dot(Umat * phi, Umat.T)
+        return project_basis_covariance(Umat, phi)
 
 
 class SqExpSWNoise(NoiseComponent):
@@ -1417,7 +1424,7 @@ class SqExpSWNoise(NoiseComponent):
 
     def sq_exp_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Umat, phi = self.sq_exp_sw_basis_weight_pair(toas)
-        return np.dot(Umat * phi, Umat.T)
+        return project_basis_covariance(Umat, phi)
 
 
 class QuasiPeriodicSWNoise(NoiseComponent):
@@ -1570,7 +1577,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
 
     def quasi_periodic_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
         Umat, phi = self.quasi_periodic_sw_basis_weight_pair(toas)
-        return np.dot(Umat * phi, Umat.T)
+        return project_basis_covariance(Umat, phi)
 
 
 def get_ecorr_epochs(toas_table: np.ndarray, dt: float = 1, nmin: int = 2) -> List[int]:

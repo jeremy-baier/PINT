@@ -3090,14 +3090,14 @@ def sherman_morrison_dot(
 
 
 def woodbury_dot(
-    Ndiag: np.ndarray, U: np.ndarray, Phidiag: np.ndarray, x: np.ndarray, y: np.ndarray
+    Ndiag: np.ndarray, U: np.ndarray, Phi: np.ndarray, x: np.ndarray, y: np.ndarray
 ) -> Tuple[float, float]:
     """
     Compute an inner product of the form
         (x| C^-1 |y)
     where
         C = N + U Phi U^T ,
-    N and Phi are diagonal matrices, using the Woodbury
+    N is diagonal and Phi can be diagonal or full, using the Woodbury
     identity
         C^-1 = N^-1 - N^-1 - N^-1 U Sigma^-1 U^T N^-1
     where
@@ -3112,8 +3112,8 @@ def woodbury_dot(
         Diagonal elements of the diagonal matrix N
     U: array-like
         A matrix that represents a rank-n update to N
-    Phidiag: array-like
-        Weights associated with the rank-n update
+    Phi: array-like
+        Basis-space covariance associated with the rank-n update
     x: array-like
         Vector 1 for the inner product
     y: array-like
@@ -3130,13 +3130,19 @@ def woodbury_dot(
     x_Ninv_y = np.sum(x * y / Ndiag)
     x_Ninv_U = (x / Ndiag) @ U
     y_Ninv_U = (y / Ndiag) @ U
-    Sigma = np.diag(1 / Phidiag) + (U.T / Ndiag) @ U
+    if np.ndim(Phi) == 1:
+        Phiinv = np.diag(1 / Phi)
+        logdet_Phi = np.sum(np.log(Phi))
+    else:
+        Phiinv = np.linalg.inv(Phi)
+        _, logdet_Phi = np.linalg.slogdet(Phi.astype(float))
+
+    Sigma = Phiinv + (U.T / Ndiag) @ U
     Sigma_cf = cho_factor(Sigma)
 
     x_Cinv_y = x_Ninv_y - x_Ninv_U @ cho_solve(Sigma_cf, y_Ninv_U)
 
     logdet_N = np.sum(np.log(Ndiag))
-    logdet_Phi = np.sum(np.log(Phidiag))
     _, logdet_Sigma = np.linalg.slogdet(Sigma.astype(float))
 
     logdet_C = logdet_N + logdet_Phi + logdet_Sigma
