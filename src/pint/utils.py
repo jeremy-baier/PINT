@@ -3039,6 +3039,28 @@ def bayesian_information_criterion(
         )
 
 
+def get_phiinv(phi: np.ndarray) -> np.ndarray:
+    """Invert the phi matrix in a stable way.
+    We relegate phi to double precision before inverting because we don't care about the precision of the noise parameters,
+    and this allows us to use the more stable double precision Cholesky decomposition for inversion.
+    Uses Cholesky-based inversion for SPD covariance matrices, with fallback to
+    direct inversion when Cholesky fails.
+    """
+    if np.ndim(phi) == 1:
+        return 1 / phi
+    arr = np.asarray(phi)
+    if arr.dtype == np.longdouble:
+        arr = arr.astype(np.float64)
+    elif np.issubdtype(arr.dtype, np.clongdouble):
+        arr = arr.astype(np.complex128)
+    try:
+        cf = scipy.linalg.cho_factor(arr, lower=True)
+        phiinv = scipy.linalg.cho_solve(cf, np.eye(arr.shape[0], dtype=arr.dtype))
+    except scipy.linalg.LinAlgError:
+        phiinv = np.linalg.inv(arr)
+    return phiinv
+
+
 def sherman_morrison_dot(
     Ndiag: np.ndarray, v: np.ndarray, w: float, x: np.ndarray, y: np.ndarray
 ) -> Tuple[float, float]:
@@ -3134,7 +3156,7 @@ def woodbury_dot(
         Phiinv = np.diag(1 / Phi)
         logdet_Phi = np.sum(np.log(Phi))
     else:
-        Phiinv = np.linalg.inv(Phi)
+        Phiinv = get_phiinv(Phi)
         _, logdet_Phi = np.linalg.slogdet(Phi.astype(float))
 
     Sigma = Phiinv + (U.T / Ndiag) @ U

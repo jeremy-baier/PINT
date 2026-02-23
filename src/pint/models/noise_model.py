@@ -1368,11 +1368,17 @@ class SqExpSWNoise(NoiseComponent):
         Retrieve square exponential and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        if self.TDSWDT.value is None:
-            log.warning(
-                "TDSWDT is not set, using default value of 30 days for SqExpSWNoise"
+        try:
+            self.TDSWDT.value
+        except AttributeError:
+            self.TDSWDT = floatParameter(
+                name="TDSWDT",
+                units="",
+                aliases=[],
+                value=30.0,
+                description="Linear interpolation time step for time-domain noise.",
+                convert_tcb2tdb=False,
             )
-            dt = 30.0
         else:
             dt = self.TDSWDT.value
 
@@ -1395,7 +1401,7 @@ class SqExpSWNoise(NoiseComponent):
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
         (_, _, dt) = self.get_sqexp_vals()
-        Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
+        Umat, _ = linear_interpolation_basis(t, nodes=None, dt= dt * 86400)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1411,7 +1417,7 @@ class SqExpSWNoise(NoiseComponent):
         t = (tbl["tdbld"].quantity * u.day).to(u.s).value
 
         (log10_sigma, log10_ell, dt) = self.get_sqexp_vals()
-        _, nodes = linear_interpolation_basis(t, dt=dt * 86400)
+        _, nodes = linear_interpolation_basis(t, nodes=None, dt=dt * 86400)
 
         return se_kernel(nodes, log10_sigma, log10_ell)
 
@@ -1544,7 +1550,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
         _, _, dt = self.get_quasi_periodic_vals()
-        Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
+        Umat, _ = linear_interpolation_basis(t, nodes=None, dt=dt * 86400)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.

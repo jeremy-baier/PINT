@@ -93,7 +93,7 @@ from pint.pint_matrix import (
 )
 from pint.residuals import Residuals, WidebandTOAResiduals
 from pint.toa import TOAs
-from pint.utils import FTest, normalize_designmatrix
+from pint.utils import FTest, get_phiinv, normalize_designmatrix
 
 __all__ = [
     "Fitter",
@@ -2745,28 +2745,6 @@ def get_gls_mtcm_mtcy(
         mtcm += phiinv
     mtcy = np.dot(M.T, cinv * residuals)
     return mtcm, mtcy
-
-
-def get_phiinv(phi: np.ndarray) -> np.ndarray:
-    """Invert the phi matrix in a stable way.
-    We relegate phi to double precision before inverting because we don't care about the precision of the noise parameters,
-    and this allows us to use the more stable double precision Cholesky decomposition for inversion.
-    Uses Cholesky-based inversion for SPD covariance matrices, with fallback to
-    direct inversion when Cholesky fails.
-    """
-    if np.ndim(phi) == 1:
-        return 1 / phi
-    arr = np.asarray(phi)
-    if arr.dtype == np.longdouble:
-        arr = arr.astype(np.float64)
-    elif np.issubdtype(arr.dtype, np.clongdouble):
-        arr = arr.astype(np.complex128)
-    try:
-        cf = scipy.linalg.cho_factor(arr, lower=True)
-        phiinv = scipy.linalg.cho_solve(cf, np.eye(arr.shape[0], dtype=arr.dtype))
-    except scipy.linalg.LinAlgError:
-        phiinv = np.linalg.inv(arr)
-    return phiinv
 
 
 def _solve_svd(
