@@ -6,7 +6,7 @@ import warnings
 
 import astropy.units as u
 import numpy as np
-from scipy.stats import interpolate
+from scipy import interpolate
 from loguru import logger as log
 
 from pint import DMconst, dmu
@@ -1203,7 +1203,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
 class RidgeSWNoise(NoiseComponent):
     """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
 
-    register = True
+    register = False
     category = "ridge_SW_noise"
 
     introduces_correlated_errors = True
@@ -1217,17 +1217,18 @@ class RidgeSWNoise(NoiseComponent):
 
         self.add_param(
             floatParameter(
-                name="TNSWDT",
-                units="",
+                name="TDSWDT",
+                units="day",
                 aliases=[],
+                value=30.0,
                 description="Linear interpolation time step for time-domain SW noise.",
                 convert_tcb2tdb=False,
             )
         )
         self.add_param(
             floatParameter(
-                name="TNSWLOGSIG",
-                units="",
+                name="TDSWLOGSIG",
+                units="s",
                 aliases=[],
                 description="Amplitude of time-domain SW noise" " ridge kernel.",
                 convert_tcb2tdb=False,
@@ -1237,23 +1238,30 @@ class RidgeSWNoise(NoiseComponent):
         self.covariance_matrix_funcs += [self.ridge_sw_cov_matrix]
         self.basis_funcs += [self.ridge_sw_basis_weight_pair]
 
-    def get_ridge_vals(self) -> Tuple[float, float, float]:
+    def get_ridge_vals(self) -> Tuple[float, float]:
         """
         Retrieve ridge regression and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        if self.TNSWDT.value is None:
+        try:
+            self.TDSWDT.value
+        except AttributeError:
             log.warning(
-                "TNSWDT is not set, using default value of 30 days for RidgeSWNoise"
+                "TDSWDT is not set, using default value of 30 days for RidgeSWNoise"
             )
             dt = 30.0
         else:
-            dt = self.TNSWDT.value
+            dt = self.TDSWDT.value
 
-        if self.TNSWLOGSIG.value is not None:
-            log10_sigma = self.TNSWLOGSIG.value
+        try:
+            self.TDSWLOGSIG.value
+        except AttributeError:
+            log.warning(
+                "TDSWLOGSIG is not set, using default value of -6.0 s for RidgeSWNoise"
+            )
+            log10_sigma = -6.0
         else:
-            raise ValueError("TNSWDT and TNSWLOGSIG must be set for RidgeSWNoise")
+            log10_sigma = self.TDSWLOGSIG.value
 
         return log10_sigma, dt
 
@@ -1268,7 +1276,7 @@ class RidgeSWNoise(NoiseComponent):
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
         _, dt = self.get_ridge_vals()
-        Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
+        Umat, _ = linear_interpolation_basis(t, dt=30 * 86400)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1284,7 +1292,7 @@ class RidgeSWNoise(NoiseComponent):
         t = (tbl["tdbld"].quantity * u.day).to(u.s).value
 
         log10_sigma, dt = self.get_ridge_vals()
-        _, nodes = linear_interpolation_basis(t, dt=dt * 86400)
+        _, nodes = linear_interpolation_basis(t, dt=30 * 86400)
 
         return ridge_kernel(nodes, log10_sigma)
 
@@ -1310,7 +1318,7 @@ class RidgeSWNoise(NoiseComponent):
 class SqExpSWNoise(NoiseComponent):
     """Squared expoentential time-domain kernel for the noise covariance matrix."""
 
-    register = True
+    register = False
     category = "sqexp_SW_noise"
 
     introduces_correlated_errors = True
@@ -1324,7 +1332,7 @@ class SqExpSWNoise(NoiseComponent):
 
         self.add_param(
             floatParameter(
-                name="TNSWDT",
+                name="TDSWDT",
                 units="",
                 aliases=[],
                 description="Linear interpolation time step for time-domain noise.",
@@ -1333,7 +1341,7 @@ class SqExpSWNoise(NoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="TNSWLOGSIG",
+                name="TDSWLOGSIG",
                 units="",
                 aliases=[],
                 description="Amplitude of time-domain SW noise"
@@ -1343,7 +1351,7 @@ class SqExpSWNoise(NoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="TNSWLOGELL",
+                name="TDSWLOGELL",
                 units="",
                 aliases=[],
                 description="Charateristic length scale of square exponential"
@@ -1360,19 +1368,19 @@ class SqExpSWNoise(NoiseComponent):
         Retrieve square exponential and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        if self.TNSWDT.value is None:
+        if self.TDSWDT.value is None:
             log.warning(
-                "TNSWDT is not set, using default value of 30 days for SqExpSWNoise"
+                "TDSWDT is not set, using default value of 30 days for SqExpSWNoise"
             )
             dt = 30.0
         else:
-            dt = self.TNSWDT.value
+            dt = self.TDSWDT.value
 
-        if self.TNSWLOGELL.value is not None or self.TNSWLOGSIG.value is not None:
-            log10_sigma = self.TNSWLOGSIG.value
-            log10_ell = self.TNSWLOGELL.value
+        if self.TDSWLOGELL.value is not None or self.TDSWLOGSIG.value is not None:
+            log10_sigma = self.TDSWLOGSIG.value
+            log10_ell = self.TDSWLOGELL.value
         else:
-            raise ValueError("TNSWDT and TNSWLOGSIG must be set for SqExpSWNoise")
+            raise ValueError("TDSWDT and TDSWLOGSIG must be set for SqExpSWNoise")
 
         return log10_sigma, log10_ell, dt
 
@@ -1386,7 +1394,7 @@ class SqExpSWNoise(NoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        _, _, dt = self.get_sqexp_vals()
+        (_, _, dt) = self.get_sqexp_vals()
         Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
@@ -1430,7 +1438,7 @@ class SqExpSWNoise(NoiseComponent):
 class QuasiPeriodicSWNoise(NoiseComponent):
     """Quasi-periodic time-domain kernel for the noise covariance matrix."""
 
-    register = True
+    register = False
     category = "qp_SW_noise"
 
     introduces_correlated_errors = True
@@ -1444,7 +1452,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
 
         self.add_param(
             floatParameter(
-                name="TNDSWT",
+                name="TDSWDT",
                 units="",
                 aliases=[],
                 description="Linear interpolation time step for time-domain noise.",
@@ -1453,7 +1461,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="TNDMLOGSIG",
+                name="TDSWLOGSIG",
                 units="",
                 aliases=[],
                 description="Amplitude of time-domain SW noise"
@@ -1463,7 +1471,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="TNSWLOGELL",
+                name="TDSWLOGELL",
                 units="",
                 aliases=[],
                 description="Charateristic length scale of quasi-periodic"
@@ -1473,7 +1481,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="TNSWLOGGAMP",
+                name="TDSWLOGGAMP",
                 units="",
                 aliases=[],
                 description="Mixing parameter for quasi-periodic time-domain SW noise.",
@@ -1482,7 +1490,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="TNSWLOGP",
+                name="TDSWLOGP",
                 units="",
                 aliases=[],
                 description="Periodicity of quasi-periodic time-domain SW noise in years.",
@@ -1493,33 +1501,33 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         self.covariance_matrix_funcs += [self.quasi_periodic_sw_cov_matrix]
         self.basis_funcs += [self.quasi_periodic_sw_basis_weight_pair]
 
-    def get_quasi_periodic_vals(self) -> Tuple[float, float, float]:
+    def get_quasi_periodic_vals(self) -> Tuple[float, float, float, float, float]:
         """
         Retrieve quasi-periodic and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        if self.TNDSWT.value is None:
+        if self.TDSWDT.value is None:
             log.warning(
-                "TNDSWT is not set, using default value of 30 days for QuasiPeriodicSWNoise"
+                "TDSWDT is not set, using default value of 30 days for QuasiPeriodicSWNoise"
             )
             dt = 30.0
         else:
-            dt = self.TNDSWT.value
+            dt = self.TDSWDT.value
 
         if (
-            self.TNSWLOGP.value is not None
-            or self.TNSWLOGSIG.value is not None
-            or self.TNSWLOGELL.value is not None
-            or self.TNSWLOGGAMP.value is not None
-            or self.TNSWLOGP.value is not None
+            self.TDSWLOGP.value is not None
+            or self.TDSWLOGSIG.value is not None
+            or self.TDSWLOGELL.value is not None
+            or self.TDSWLOGGAMP.value is not None
+            or self.TDSWLOGP.value is not None
         ):
-            log10_sigma = self.TNSWLOGSIG.value
-            log10_ell = self.TNSWLOGELL.value
-            log10_gamma_p = self.TNSWLOGGAMP.value
-            log10_p = self.TNSWLOGP.value
+            log10_sigma = self.TDSWLOGSIG.value
+            log10_ell = self.TDSWLOGELL.value
+            log10_gamma_p = self.TDSWLOGGAMP.value
+            log10_p = self.TDSWLOGP.value
         else:
             raise ValueError(
-                "TNDSWT, TNSWLOGSIG, TNSWLOGELL, TNSWLOGGAMP, and TNSWLOGP must be set for QuasiPeriodicSWNoise"
+                "TDSWDT, TDSWLOGSIG, TDSWLOGELL, TDSWLOGGAMP, and TDSWLOGP must be set for QuasiPeriodicSWNoise"
             )
 
         return log10_sigma, log10_ell, log10_gamma_p, log10_p, dt
@@ -1558,10 +1566,10 @@ class QuasiPeriodicSWNoise(NoiseComponent):
 
         return periodic_kernel(nodes, log10_sigma, log10_ell, log10_gamma_p, log10_p)
 
-    def quasi_periodic_dm_basis_weight_pair(
+    def quasi_periodic_sw_basis_weight_pair(
         self, toas: TOAs
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Return a chromatic linear interpolation basis and quasi-periodic dm noise weights.
+        """Return a chromatic linear interpolation basis and quasi-periodic SW noise weights.
 
         Uses chromatic linear interpolation basis in the time domain to model dispersive delays.
         Time domain GPs have associated covariance functions which are priors over functions.
