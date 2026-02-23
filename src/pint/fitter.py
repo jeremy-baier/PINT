@@ -1341,7 +1341,8 @@ class GLSState(ModelState):
             M, params, units = self.model.full_designmatrix(self.fitter.toas)
             M, norm = normalize_designmatrix(M, params)
             phi = self.model.full_basis_weight(self.fitter.toas)
-            phiinv = get_phiinv(phi, norm)
+            phiinv = get_phiinv(phi)
+            phiinv = (phiinv / norm).T / norm  # normalize the phi^-1 matrix
             Nvec = (
                 self.model.scaled_toa_uncertainty(self.fitter.toas).to_value(u.s) ** 2
             )
@@ -2021,6 +2022,7 @@ class GLSFitter(Fitter):
                 M, norm = normalize_designmatrix(M, params)
                 phi = self.model.full_basis_weight(self.toas)
                 phiinv = get_phiinv(phi)
+                phiinv = (phiinv / norm).T / norm  # normalize the phi^-1 matrix
                 Nvec = self.model.scaled_toa_uncertainty(self.toas).to(u.s).value ** 2
                 mtcm, mtcy = get_gls_mtcm_mtcy(phiinv, Nvec, M, residuals)
 
@@ -2745,7 +2747,7 @@ def get_gls_mtcm_mtcy(
     return mtcm, mtcy
 
 
-def get_phiinv(phi: np.ndarray, norm: np.ndarray) -> np.ndarray:
+def get_phiinv(phi: np.ndarray) -> np.ndarray:
     """Invert the phi matrix in a stable way.
     We relegate phi to double precision before inverting because we don't care about the precision of the noise parameters,
     and this allows us to use the more stable double precision Cholesky decomposition for inversion.
@@ -2753,7 +2755,7 @@ def get_phiinv(phi: np.ndarray, norm: np.ndarray) -> np.ndarray:
     direct inversion when Cholesky fails.
     """
     if np.ndim(phi) == 1:
-        return 1 / phi / norm**2
+        return 1 / phi
     arr = np.asarray(phi)
     if arr.dtype == np.longdouble:
         arr = arr.astype(np.float64)
@@ -2764,7 +2766,7 @@ def get_phiinv(phi: np.ndarray, norm: np.ndarray) -> np.ndarray:
         phiinv = scipy.linalg.cho_solve(cf, np.eye(arr.shape[0], dtype=arr.dtype))
     except scipy.linalg.LinAlgError:
         phiinv = np.linalg.inv(arr)
-    return (phiinv / norm).T / norm
+    return phiinv
 
 
 def _solve_svd(

@@ -19,6 +19,7 @@ from scipy.linalg import cho_factor, cho_solve, LinAlgError
 from scipy.stats import kstest
 
 from pint import dmu
+from pint.fitter import get_phiinv
 from pint.models.dispersion_model import Dispersion
 from pint.models.parameter import maskParameter
 from pint.models.timing_model import TimingModel
@@ -1463,7 +1464,7 @@ def whiten_residuals(
     if np.ndim(Phi) == 1:
         Phiinv = np.diag(1 / Phi)
     else:
-        Phiinv = np.linalg.inv(Phi)
+        Phiinv = get_phiinv(Phi)
     Sigmainv = UT_Ninv_U + Phiinv
     Sigmainv_cf = cho_factor(Sigmainv)
 
