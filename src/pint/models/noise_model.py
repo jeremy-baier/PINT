@@ -6,6 +6,7 @@ import warnings
 
 import astropy.units as u
 import numpy as np
+from scipy.stats import interpolate
 from loguru import logger as log
 
 from pint import DMconst, dmu
@@ -1192,6 +1193,385 @@ class PLRedNoise(CorrelatedNoiseComponent):
         Fmat, phi = self.pl_rn_basis_weight_pair(toas)
         return np.dot(Fmat * phi[None, :], Fmat.T)
 
+class RidgeSWNoise(NoiseComponent):
+    """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
+
+    register = True
+    category = "ridge_SW_noise"
+
+    introduces_correlated_errors = True
+    introduces_dm_errors = True
+    is_time_correlated = True
+
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+        self.add_param(
+            floatParameter(
+                name="TNSWDT",
+                units="",
+                aliases=[],
+                description="Linear interpolation time step for time-domain SW noise.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNSWLOGSIG",
+                units="",
+                aliases=[],
+                description="Amplitude of time-domain SW noise" " ridge kernel.",
+                convert_tcb2tdb=False,
+            )
+        )
+
+        self.covariance_matrix_funcs += [self.ridge_sw_cov_matrix]
+        self.basis_funcs += [self.ridge_sw_basis_weight_pair]
+
+    def get_ridge_vals(self) -> Tuple[float, float, float]:
+        """
+        Retrieve ridge regression and time-domain parameters
+        from the model, substituting defaults if unspecified.
+        """
+        if self.TNSWDT.value is None:
+            log.warning(
+                "TNSWDT is not set, using default value of 30 days for RidgeSWNoise"
+            )
+            dt = 30.0
+        else:
+            dt = self.TNSWDT.value
+
+        if self.TNSWLOGSIG.value is not None:
+            log10_sigma = self.TNSWLOGSIG.value
+        else:
+            raise ValueError("TNSWDT and TNSWLOGSIG must be set for RidgeSWNoise")
+
+        return log10_sigma, dt
+
+    def get_noise_basis(self, toas: TOAs) -> np.ndarray:
+        """Return a chromatic linear interpolation matrix for RidgeSWNoise.
+
+        See the documentation for ridge_sw_basis_weight_pair function for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        fref = 1400 * u.MHz
+        freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
+
+        _, dt = self.get_ridge_vals()
+        Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
+        # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
+        solar_wind_geometry = self._parent.solar_wind_geometry(toas)
+        # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
+        dt_DM = (solar_wind_geometry * DMconst / (freqs**2)).value
+
+        return Umat * dt_DM[:, None]
+
+    def get_noise_weights(self, toas: TOAs) -> np.ndarray:
+        """Return ridge regression time domain DM noise weights.
+
+        See the documentation for ridge_dm_basis_weight_pair for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        log10_sigma, dt = self.get_ridge_vals()
+        _, nodes = linear_interpolation_basis(t, dt=dt * 86400)
+
+        return ridge_kernel(nodes, log10_sigma)
+
+    def ridge_sw_basis_weight_pair(self, toas: TOAs) -> Tuple[np.ndarray, np.ndarray]:
+        """Return a chromatic linear interpolation basis and ridge SW noise weights.
+
+        Uses chromatic linear interpolation basis in the time domain to model solar wind dispersive delays.
+        Time domain GPs have associated covariance functions which are priors over functions.
+        The ridge regression or white noise covariance function is a common choice for modeling
+        smooth functions. It is defined as:
+        .. math::
+            K(t_i, t_j) = \\sigma^2 * \\delta(t_i - t_j)
+        where :math:`\\sigma` is the amplitude of the noise, and :math:`\\delta(t_i - t_j)` is a delta function.
+
+        """
+        return (self.get_noise_basis(toas), self.get_noise_weights(toas))
+
+    def ridge_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
+        Umat, phi = self.ridge_sw_basis_weight_pair(toas)
+        return np.dot(Umat * phi, Umat.T)
+
+
+class SqExpSWNoise(NoiseComponent):
+    """Squared expoentential time-domain kernel for the noise covariance matrix."""
+
+    register = True
+    category = "sqexp_SW_noise"
+
+    introduces_correlated_errors = True
+    introduces_dm_errors = True
+    is_time_correlated = True
+
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+        self.add_param(
+            floatParameter(
+                name="TNSWDT",
+                units="",
+                aliases=[],
+                description="Linear interpolation time step for time-domain noise.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNSWLOGSIG",
+                units="",
+                aliases=[],
+                description="Amplitude of time-domain SW noise"
+                " square exponential kernel.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNSWLOGELL",
+                units="",
+                aliases=[],
+                description="Charateristic length scale of square exponential"
+                " time-domain SW noise in days.",
+                convert_tcb2tdb=False,
+            )
+        )
+
+        self.covariance_matrix_funcs += [self.sq_exp_sw_cov_matrix]
+        self.basis_funcs += [self.sq_exp_sw_basis_weight_pair]
+
+    def get_sqexp_vals(self) -> Tuple[float, float, float]:
+        """
+        Retrieve square exponential and time-domain parameters
+        from the model, substituting defaults if unspecified.
+        """
+        if self.TNSWDT.value is None:
+            log.warning(
+                "TNSWDT is not set, using default value of 30 days for SqExpSWNoise"
+            )
+            dt = 30.0
+        else:
+            dt = self.TNSWDT.value
+
+        if self.TNSWLOGELL.value is not None or self.TNSWLOGSIG.value is not None:
+            log10_sigma = self.TNSWLOGSIG.value
+            log10_ell = self.TNSWLOGELL.value
+        else:
+            raise ValueError("TNSWDT and TNSWLOGSIG must be set for SqExpSWNoise")
+
+        return log10_sigma, log10_ell, dt
+
+    def get_noise_basis(self, toas: TOAs) -> np.ndarray:
+        """Return a Fourier design matrix for red noise.
+
+        See the documentation for pl_rn_basis_weight_pair function for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        fref = 1400 * u.MHz
+        freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
+
+        _, _, dt = self.get_sqexp_vals()
+        Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
+        # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
+        solar_wind_geometry = self._parent.solar_wind_geometry(toas)
+        # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
+        dt_DM = (solar_wind_geometry * DMconst / (freqs**2)).value
+
+        return Umat * dt_DM[:, None]
+
+    def get_noise_weights(self, toas: TOAs) -> np.ndarray:
+        """Return square exponential time domain DM noise weights.
+
+        See the documentation for sq_exp_dm_basis_weight_pair for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        (log10_sigma, log10_ell, dt) = self.get_sqexp_vals()
+        _, nodes = linear_interpolation_basis(t, dt=dt * 86400)
+
+        return se_kernel(nodes, log10_sigma, log10_ell)
+
+    def sq_exp_sw_basis_weight_pair(self, toas: TOAs) -> Tuple[np.ndarray, np.ndarray]:
+        """Return a chromatic linear interpolation basis and square exponential sw noise weights.
+
+        Uses chromatic linear interpolation basis in the time domain to model dispersive delays.
+        Time domain GPs have associated covariance functions which are priors over functions.
+        The square exponential covariance function is a common choice for modeling
+        smooth functions. It is defined as:
+        .. math::
+            K(t_i, t_j) = \\sigma^2 \\exp\\left(-\\frac{(t_i - t_j)^2}{2 \\ell^2}\\right)
+        where :math:`\\sigma` is the amplitude of the noise, and :math:`\\ell` is the characteristic
+        length scale of the noise.
+
+        """
+        return (self.get_noise_basis(toas), self.get_noise_weights(toas))
+
+    def sq_exp_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
+        Umat, phi = self.sq_exp_sw_basis_weight_pair(toas)
+        return np.dot(Umat * phi, Umat.T)
+
+
+class QuasiPeriodicSWNoise(NoiseComponent):
+    """Quasi-periodic time-domain kernel for the noise covariance matrix."""
+
+    register = True
+    category = "qp_SW_noise"
+
+    introduces_correlated_errors = True
+    introduces_dm_errors = True
+    is_time_correlated = True
+
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+        self.add_param(
+            floatParameter(
+                name="TNDSWT",
+                units="",
+                aliases=[],
+                description="Linear interpolation time step for time-domain noise.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNDMLOGSIG",
+                units="",
+                aliases=[],
+                description="Amplitude of time-domain SW noise"
+                " quasi-periodic kernel.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNSWLOGELL",
+                units="",
+                aliases=[],
+                description="Charateristic length scale of quasi-periodic"
+                " time-domain SW noise in days.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNSWLOGGAMP",
+                units="",
+                aliases=[],
+                description="Mixing parameter for quasi-periodic time-domain SW noise.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            floatParameter(
+                name="TNSWLOGP",
+                units="",
+                aliases=[],
+                description="Periodicity of quasi-periodic time-domain SW noise in years.",
+                convert_tcb2tdb=False,
+            )
+        )
+
+        self.covariance_matrix_funcs += [self.quasi_periodic_sw_cov_matrix]
+        self.basis_funcs += [self.quasi_periodic_sw_basis_weight_pair]
+
+    def get_quasi_periodic_vals(self) -> Tuple[float, float, float]:
+        """
+        Retrieve quasi-periodic and time-domain parameters
+        from the model, substituting defaults if unspecified.
+        """
+        if self.TNDSWT.value is None:
+            log.warning(
+                "TNDSWT is not set, using default value of 30 days for QuasiPeriodicSWNoise"
+            )
+            dt = 30.0
+        else:
+            dt = self.TNDSWT.value
+
+        if (
+            self.TNSWLOGP.value is not None
+            or self.TNSWLOGSIG.value is not None
+            or self.TNSWLOGELL.value is not None
+            or self.TNSWLOGGAMP.value is not None
+            or self.TNSWLOGP.value is not None
+        ):
+            log10_sigma = self.TNSWLOGSIG.value
+            log10_ell = self.TNSWLOGELL.value
+            log10_gamma_p = self.TNSWLOGGAMP.value
+            log10_p = self.TNSWLOGP.value
+        else:
+            raise ValueError(
+                "TNDSWT, TNSWLOGSIG, TNSWLOGELL, TNSWLOGGAMP, and TNSWLOGP must be set for QuasiPeriodicSWNoise"
+            )
+
+        return log10_sigma, log10_ell, log10_gamma_p, log10_p, dt
+
+    def get_noise_basis(self, toas: TOAs) -> np.ndarray:
+        """Return a linear interpolation matrix for QuasiPeriodicSWNoise.
+
+        See the documentation for quasi_periodic_sw_basis_weight_pair function for details.
+        """
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        fref = 1400 * u.MHz
+        freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
+
+        _, _, dt = self.get_quasi_periodic_vals()
+        Umat, _ = linear_interpolation_basis(t, dt=dt * 86400)
+        # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
+        solar_wind_geometry = self._parent.solar_wind_geometry(toas)
+        # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
+        dt_DM = (solar_wind_geometry * DMconst / (freqs**2)).value
+
+        return Umat * dt_DM[:, None]
+
+    def get_noise_weights(self, toas: TOAs) -> np.ndarray:
+        """Return square exponential time domain SW noise weights.
+
+        See the documentation for sq_exp_sw_basis_weight_pair for details."""
+        tbl = toas.table
+        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+
+        (log10_sigma, log10_ell, log10_gamma_p, log10_p, dt) = (
+            self.get_quasi_periodic_vals()
+        )
+        _, nodes = linear_interpolation_basis(t, dt=dt * 86400)
+
+        return periodic_kernel(nodes, log10_sigma, log10_ell, log10_gamma_p, log10_p)
+
+    def quasi_periodic_dm_basis_weight_pair(
+        self, toas: TOAs
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return a chromatic linear interpolation basis and quasi-periodic dm noise weights.
+
+        Uses chromatic linear interpolation basis in the time domain to model dispersive delays.
+        Time domain GPs have associated covariance functions which are priors over functions.
+        The periodic covariance function is a common choice for modeling
+        smooth functions. It is defined as:
+        .. math::
+            K(t_i, t_j) = K_{SE}(t_i, t_j) *
+            \\exp\\left(-\\Gamma_p\\sin\\left(\\frac{\\pi(t_i - t_j)^2}{p}\\right)^2\\right)
+        where :math:`K_{SE}` is the square exponential kernel, and :math:`p` is the periodicity.
+
+        """
+        return (self.get_noise_basis(toas), self.get_noise_weights(toas))
+
+    def quasi_periodic_sw_cov_matrix(self, toas: TOAs) -> np.ndarray:
+        Umat, phi = self.quasi_periodic_sw_basis_weight_pair(toas)
+        return np.dot(Umat * phi, Umat.T)
+
 
 def get_ecorr_epochs(toas_table: np.ndarray, dt: float = 1, nmin: int = 2) -> List[int]:
     """Find only epochs with more than 1 TOA for applying ECORR."""
@@ -1332,6 +1712,39 @@ def get_rednoise_freqs(
     return freqs
 
 
+def linear_interpolation_basis(
+        toas,
+        nodes=None,
+        dt=None,
+        kind="linear",
+):
+    if nodes is None:
+        if dt is None:
+            raise ValueError("Must provide either nodes or dt for linear interpolation basis.")
+        t_min, t_max = np.min(toas)/86400, np.max(toas)/86400
+        nodes = np.arange(t_min, t_max + dt, dt) # FIXME : this may need to get improved.
+    nodes = nodes * 86400  # MJD to seconds
+    basis = np.identity(len(nodes))
+    interp = interpolate.interp1d(
+        nodes,
+        basis,
+        kind=kind,
+        axis=0,
+        bounds_error=False,
+        fill_value=0.0,
+        assume_sorted=True,
+    )
+    M = interp(toas)
+    # only return non-zero columns for rank reduction
+    idx = M.sum(axis=0) != 0
+    if not np.any(idx):
+        raise RuntimeError(
+            "Interpolation basis has no support in the TOA range. Perhaps check units."
+        )
+
+    return M[:, idx], nodes[idx]
+
+
 def create_fourier_design_matrix(t, f) -> np.ndarray:
     """
     Construct a Fourier design matrix from a given set of frequencies.
@@ -1379,3 +1792,38 @@ def powerlaw(
 
     fyr = (1 / u.year).to_value(u.Hz)
     return A**2 / 12.0 / np.pi**2 * fyr ** (gamma - 3) * f ** (-gamma) * above_fl
+
+
+def periodic_kernel(nodes, log10_sigma=-7, log10_ell=2, log10_gam_p=0, log10_p=0):
+    """Quasi-periodic kernel for DM"""
+    r = np.abs(nodes[None, :] - nodes[:, None])
+
+    # convert units to seconds
+    sigma = 10**log10_sigma
+    l = 10**log10_ell * 86400
+    p = 10**log10_p * 3.16e7
+    gam_p = 10**log10_gam_p
+    d = np.eye(r.shape[0]) * (sigma / 50000) ** 2
+    K = sigma**2 * np.exp(-(r**2) / 2 / l**2 - gam_p * np.sin(np.pi * r / p) ** 2) + d
+    return K
+
+
+def se_kernel(nodes, log10_sigma=-7, log10_ell=2):
+    """Squared-exponential kernel"""
+    r = np.abs(nodes[None, :] - nodes[:, None])
+
+    # Convert everything into seconds
+    l = 10**log10_ell * 86400
+    sigma = 10**log10_sigma
+    d = np.eye(r.shape[0]) * (sigma / 50000) ** 2
+    K = sigma**2 * np.exp(-(r**2) / 2 / l**2) + d
+    return K
+
+
+def ridge_kernel(nodes, log10_sigma=-7):
+    """Ridge kernel for SW"""
+    r = np.abs(nodes[None, :] - nodes[:, None])
+
+    # Convert to seconds
+    sigma = 10**(log10_sigma*2)
+    return np.eye(r.shape[0]) * sigma
