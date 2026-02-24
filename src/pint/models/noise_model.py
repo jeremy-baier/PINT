@@ -1206,7 +1206,6 @@ class PLRedNoise(CorrelatedNoiseComponent):
         Fmat, phi = self.pl_rn_basis_weight_pair(toas)
         return project_basis_covariance(Fmat, phi)
 
-class RidgeSWNoise(NoiseComponent):
     """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
 
     register = False
@@ -1254,7 +1253,7 @@ class RidgeSWNoise(NoiseComponent):
             self.TDSWDT.value
         except AttributeError:
             log.warning(
-                "TDSWDT is not set, using default value of 30 days for RidgeSWNoise"
+                "TDSWDT is not set, using default value of 30 days for TimeDomainRidgeSWNoise"
             )
             dt = 30.0
         else:
@@ -1264,7 +1263,7 @@ class RidgeSWNoise(NoiseComponent):
             self.TDSWLOGSIG.value
         except AttributeError:
             log.warning(
-                "TDSWLOGSIG is not set, using default value of -6.0 s for RidgeSWNoise"
+                "TDSWLOGSIG is not set, using default value of -6.0 s for TimeDomainRidgeSWNoise"
             )
             log10_sigma = -6.0
         else:
@@ -1284,7 +1283,7 @@ class RidgeSWNoise(NoiseComponent):
 
         if 0 < len(node_values) < 2:
             raise ValueError(
-                "RidgeSWNoise requires at least 2 TDSWNODE_ values when using "
+                "TimeDomainRidgeSWNoise requires at least 2 TDSWNODE_ values when using "
                 "node-based interpolation. Set >=2 TDSWNODE_ parameters, or "
                 "leave all TDSWNODE_ values unset to use TDSWDT spacing."
             )
@@ -1292,15 +1291,15 @@ class RidgeSWNoise(NoiseComponent):
         if len(node_values) >= 2:
             nodes = np.asarray(node_values, dtype=float)
             if not np.all(np.isfinite(nodes)):
-                raise ValueError("RidgeSWNoise TDSWNODE_ values must be finite.")
+                raise ValueError("TimeDomainRidgeSWNoise TDSWNODE_ values must be finite.")
             if len(np.unique(nodes)) != len(nodes):
-                raise ValueError("RidgeSWNoise TDSWNODE_ values must be unique.")
+                raise ValueError("TimeDomainRidgeSWNoise TDSWNODE_ values must be unique.")
         else:
             if self.TDSWDT.value is None or self.TDSWDT.value <= 0:
-                raise ValueError("RidgeSWNoise TDSWDT must be set to a positive value.")
+                raise ValueError("TimeDomainRidgeSWNoise TDSWDT must be set to a positive value.")
 
     def _get_ridge_nodes(self, toas: TOAs) -> np.ndarray:
-        """Return interpolation nodes in MJD for RidgeSWNoise."""
+        """Return interpolation nodes in MJD for TimeDomainRidgeSWNoise."""
         node_map = self.get_prefix_mapping_component("TDSWNODE_")
         nodes = []
         for _, node_name in node_map.items():
@@ -1313,7 +1312,7 @@ class RidgeSWNoise(NoiseComponent):
 
         _, dt = self.get_ridge_vals()
         log.warning(
-            "RidgeSWNoise has fewer than 2 TDSWNODE_ parameters set; "
+            "TimeDomainRidgeSWNoise has fewer than 2 TDSWNODE_ parameters set; "
             "falling back to legacy TDSWDT spacing."
         )
         t = (toas.table["tdbld"].quantity * u.day).to(u.s).value
@@ -1321,7 +1320,7 @@ class RidgeSWNoise(NoiseComponent):
         return np.arange(t_min, t_max + dt, dt)
 
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
-        """Return a chromatic linear interpolation matrix for RidgeSWNoise.
+        """Return a chromatic linear interpolation matrix for TimeDomainRidgeSWNoise.
 
         See the documentation for ridge_sw_basis_weight_pair function for details."""
         tbl = toas.table
@@ -1371,7 +1370,7 @@ class RidgeSWNoise(NoiseComponent):
         return project_basis_covariance(Umat, phi)
 
 
-class SqExpSWNoise(NoiseComponent):
+class TimeDomainSqExpSWNoise(NoiseComponent):
     """Squared expoentential time-domain kernel for the noise covariance matrix."""
 
     register = False
@@ -1442,7 +1441,7 @@ class SqExpSWNoise(NoiseComponent):
             log10_sigma = self.TDSWLOGSIG.value
             log10_ell = self.TDSWLOGELL.value
         else:
-            raise ValueError("TDSWDT and TDSWLOGSIG must be set for SqExpSWNoise")
+            raise ValueError("TDSWDT and TDSWLOGSIG must be set for TimeDomainSqExpSWNoise")
 
         return log10_sigma, log10_ell, dt
 
@@ -1497,7 +1496,7 @@ class SqExpSWNoise(NoiseComponent):
         return project_basis_covariance(Umat, phi)
 
 
-class QuasiPeriodicSWNoise(NoiseComponent):
+class TimeDomainQuasiPeriodicSWNoise(NoiseComponent):
     """Quasi-periodic time-domain kernel for the noise covariance matrix."""
 
     register = False
@@ -1570,7 +1569,7 @@ class QuasiPeriodicSWNoise(NoiseComponent):
         """
         if self.TDSWDT.value is None:
             log.warning(
-                "TDSWDT is not set, using default value of 30 days for QuasiPeriodicSWNoise"
+                "TDSWDT is not set, using default value of 30 days for TimeDomainQuasiPeriodicSWNoise"
             )
             dt = 30.0
         else:
@@ -1589,13 +1588,13 @@ class QuasiPeriodicSWNoise(NoiseComponent):
             log10_p = self.TDSWLOGP.value
         else:
             raise ValueError(
-                "TDSWDT, TDSWLOGSIG, TDSWLOGELL, TDSWLOGGAMP, and TDSWLOGP must be set for QuasiPeriodicSWNoise"
+                "TDSWDT, TDSWLOGSIG, TDSWLOGELL, TDSWLOGGAMP, and TDSWLOGP must be set for TimeDomainQuasiPeriodicSWNoise"
             )
 
         return log10_sigma, log10_ell, log10_gamma_p, log10_p, dt
 
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
-        """Return a linear interpolation matrix for QuasiPeriodicSWNoise.
+        """Return a linear interpolation matrix for TimeDomainQuasiPeriodicSWNoise.
 
         See the documentation for quasi_periodic_sw_basis_weight_pair function for details.
         """
