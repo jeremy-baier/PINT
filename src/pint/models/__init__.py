@@ -49,6 +49,7 @@ from pint.models.noise_model import (
     PLRedNoise,
     ScaleToaError,
     ScaleDmError,
+    TimeDomainMaternSWNoise,
     TimeDomainSqExpSWNoise,
     TimeDomainQuasiPeriodicSWNoise,
     TimeDomainRidgeSWNoise,
