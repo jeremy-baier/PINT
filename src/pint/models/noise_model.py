@@ -16,6 +16,7 @@ from pint.models.parameter import (
     intParameter,
     maskParameter,
     prefixParameter,
+    strParameter,
 )
 from pint.models.timing_model import Component
 from pint.toa import TOAs
@@ -88,6 +89,53 @@ def project_basis_covariance(U: np.ndarray, Phi: np.ndarray) -> np.ndarray:
     if np.ndim(Phi) == 1:
         return np.dot(U * Phi[None, :], U.T)
     return np.dot(U, np.dot(Phi, U.T))
+
+
+def _add_tdsw_node_component(model, node, index=None):
+    """Add one TDSWNODE_ prefix parameter to a time-domain SW noise component."""
+    dct = model.get_prefix_mapping_component("TDSWNODE_")
+    if index is None:
+        available = [
+            idx
+            for idx, par_name in dct.items()
+            if getattr(model, par_name).value is None
+        ]
+        if len(available) > 0:
+            index = int(np.min(available))
+        else:
+            index = np.max(list(dct.keys())) + 1
+    i = f"{int(index):04d}"
+
+    if isinstance(node, u.quantity.Quantity):
+        node = node.to_value(u.day)
+
+    if int(index) in dct:
+        par = getattr(model, dct[int(index)])
+        if par.value is not None:
+            raise ValueError(
+                f"Index '{index}' is already in use in this model. Please choose another"
+            )
+        par.value = node
+    else:
+        model.add_param(
+            prefixParameter(
+                name=f"TDSWNODE_{i}",
+                units="day",
+                value=node,
+                description="Interpolation node for time-domain SW noise basis (MJD).",
+                parameter_type="float",
+                convert_tcb2tdb=False,
+            )
+        )
+    model.setup()
+
+    node_map = model.get_prefix_mapping_component("TDSWNODE_")
+    nset = sum(
+        getattr(model, node_name).value is not None for _, node_name in node_map.items()
+    )
+    if nset >= 2:
+        model.validate()
+    return index
 
 
 class ScaleToaError(WhiteNoiseComponent):
@@ -1206,6 +1254,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
         Fmat, phi = self.pl_rn_basis_weight_pair(toas)
         return project_basis_covariance(Fmat, phi)
 
+class TimeDomainRidgeSWNoise(NoiseComponent):
     """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
 
     register = False
@@ -1241,17 +1290,46 @@ class PLRedNoise(CorrelatedNoiseComponent):
             )
         )
 
+        self.add_param(
+            strParameter(
+                name="TDSWINTERP_KIND",
+                value="linear",
+                description="Interpolation kind passed to scipy.interpolate.interp1d.",
+            )
+        )
+
+        self.add_param(
+            prefixParameter(
+                name="TDSWNODE_0001",
+                units="day",
+                value=None,
+                description="Interpolation node for time-domain SW noise basis (MJD).",
+                parameter_type="float",
+                convert_tcb2tdb=False,
+            )
+        )
+
         self.covariance_matrix_funcs += [self.ridge_sw_cov_matrix]
         self.basis_funcs += [self.ridge_sw_basis_weight_pair]
+
+    def add_tdsw_node_component(self, node, index=None):
+        """Add a TDSWNODE component.
+
+        Parameters
+        ----------
+        node : float or astropy.units.Quantity
+            Interpolation node in MJD (days).
+        index : int or None
+            Integer index label for the node. If None, increments max index by 1.
+        """
+        return _add_tdsw_node_component(self, node=node, index=index)
 
     def get_ridge_vals(self) -> Tuple[float, float]:
         """
         Retrieve ridge regression and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        try:
-            self.TDSWDT.value
-        except AttributeError:
+        if self.TDSWDT.value is None:
             log.warning(
                 "TDSWDT is not set, using default value of 30 days for TimeDomainRidgeSWNoise"
             )
@@ -1274,6 +1352,22 @@ class PLRedNoise(CorrelatedNoiseComponent):
     def validate(self):
         super().validate()
 
+        allowed_kinds = {
+            "linear",
+            "nearest",
+            "nearest-up",
+            "zero",
+            "slinear",
+            "quadratic",
+            "cubic",
+            "previous",
+            "next",
+        }
+        if self.TDSWINTERP_KIND.value not in allowed_kinds:
+            raise ValueError(
+                f"TimeDomainRidgeSWNoise TDSWINTERP_KIND must be one of {sorted(allowed_kinds)}."
+            )
+
         node_map = self.get_prefix_mapping_component("TDSWNODE_")
         node_values = []
         for _, node_name in node_map.items():
@@ -1281,11 +1375,20 @@ class PLRedNoise(CorrelatedNoiseComponent):
             if node_val is not None:
                 node_values.append(float(node_val))
 
+        has_nodes = len(node_values) > 0
+        dt_val = self.TDSWDT.value
+        has_nondefault_dt = dt_val is not None and dt_val != 30.0
+
+        if has_nodes and has_nondefault_dt:
+            raise ValueError(
+                "TimeDomainRidgeSWNoise requires exactly one interpolation mode: "
+                "set TDSWDT or set TDSWNODE_ parameters, but not both."
+            )
+
         if 0 < len(node_values) < 2:
             raise ValueError(
                 "TimeDomainRidgeSWNoise requires at least 2 TDSWNODE_ values when using "
-                "node-based interpolation. Set >=2 TDSWNODE_ parameters, or "
-                "leave all TDSWNODE_ values unset to use TDSWDT spacing."
+                "node-based interpolation. Set >=2 TDSWNODE_ parameters."
             )
 
         if len(node_values) >= 2:
@@ -1295,7 +1398,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
             if len(np.unique(nodes)) != len(nodes):
                 raise ValueError("TimeDomainRidgeSWNoise TDSWNODE_ values must be unique.")
         else:
-            if self.TDSWDT.value is None or self.TDSWDT.value <= 0:
+            if dt_val is not None and dt_val <= 0:
                 raise ValueError("TimeDomainRidgeSWNoise TDSWDT must be set to a positive value.")
 
     def _get_ridge_nodes(self, toas: TOAs) -> np.ndarray:
@@ -1310,14 +1413,9 @@ class PLRedNoise(CorrelatedNoiseComponent):
         if len(nodes) >= 2:
             return np.array(sorted(nodes), dtype=float)
 
-        _, dt = self.get_ridge_vals()
-        log.warning(
-            "TimeDomainRidgeSWNoise has fewer than 2 TDSWNODE_ parameters set; "
-            "falling back to legacy TDSWDT spacing."
+        raise ValueError(
+            "TimeDomainRidgeSWNoise node interpolation requires at least 2 TDSWNODE_ values."
         )
-        t = (toas.table["tdbld"].quantity * u.day).to(u.s).value
-        t_min, t_max = np.min(t) / 86400.0, np.max(t) / 86400.0
-        return np.arange(t_min, t_max + dt, dt)
 
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
         """Return a chromatic linear interpolation matrix for TimeDomainRidgeSWNoise.
@@ -1329,8 +1427,18 @@ class PLRedNoise(CorrelatedNoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        nodes = self._get_ridge_nodes(toas)
-        Umat, _ = linear_interpolation_basis(t, nodes=nodes)
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        interp_kind = self.TDSWINTERP_KIND.value
+        has_nodes = any(
+            getattr(self, node_name).value is not None
+            for _, node_name in node_map.items()
+        )
+        if has_nodes:
+            nodes = self._get_ridge_nodes(toas)
+            Umat, _ = linear_interpolation_basis(t, nodes=nodes, kind=interp_kind)
+        else:
+            dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
+            Umat, _ = linear_interpolation_basis(t, dt=dt * 86400, kind=interp_kind)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1346,8 +1454,18 @@ class PLRedNoise(CorrelatedNoiseComponent):
         t = (tbl["tdbld"].quantity * u.day).to(u.s).value
 
         log10_sigma, _ = self.get_ridge_vals()
-        nodes_in = self._get_ridge_nodes(toas)
-        _, nodes = linear_interpolation_basis(t, nodes=nodes_in)
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        interp_kind = self.TDSWINTERP_KIND.value
+        has_nodes = any(
+            getattr(self, node_name).value is not None
+            for _, node_name in node_map.items()
+        )
+        if has_nodes:
+            nodes_in = self._get_ridge_nodes(toas)
+            _, nodes = linear_interpolation_basis(t, nodes=nodes_in, kind=interp_kind)
+        else:
+            dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
+            _, nodes = linear_interpolation_basis(t, dt=dt * 86400, kind=interp_kind)
 
         return ridge_kernel(nodes, log10_sigma)
 
@@ -1390,7 +1508,18 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
                 name="TDSWDT",
                 units="",
                 aliases=[],
+                value=30.0,
                 description="Linear interpolation time step for time-domain noise.",
+                convert_tcb2tdb=False,
+            )
+        )
+        self.add_param(
+            prefixParameter(
+                name="TDSWNODE_0001",
+                units="day",
+                value=None,
+                description="Interpolation node for time-domain SW noise basis (MJD).",
+                parameter_type="float",
                 convert_tcb2tdb=False,
             )
         )
@@ -1415,27 +1544,35 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
             )
         )
 
+        self.add_param(
+            strParameter(
+                name="TDSWINTERP_KIND",
+                value="linear",
+                description="Interpolation kind passed to scipy.interpolate.interp1d.",
+            )
+        )
+
         self.covariance_matrix_funcs += [self.sq_exp_sw_cov_matrix]
         self.basis_funcs += [self.sq_exp_sw_basis_weight_pair]
+
+    def add_tdsw_node_component(self, node, index=None):
+        """Add a TDSWNODE component.
+
+        Parameters
+        ----------
+        node : float or astropy.units.Quantity
+            Interpolation node in MJD (days).
+        index : int or None
+            Integer index label for the node. If None, increments max index by 1.
+        """
+        return _add_tdsw_node_component(self, node=node, index=index)
 
     def get_sqexp_vals(self) -> Tuple[float, float, float]:
         """
         Retrieve square exponential and time-domain parameters
         from the model, substituting defaults if unspecified.
         """
-        try:
-            self.TDSWDT.value
-        except AttributeError:
-            self.TDSWDT = floatParameter(
-                name="TDSWDT",
-                units="",
-                aliases=[],
-                value=30.0,
-                description="Linear interpolation time step for time-domain noise.",
-                convert_tcb2tdb=False,
-            )
-        else:
-            dt = self.TDSWDT.value
+        dt = self.TDSWDT.value
 
         if self.TDSWLOGELL.value is not None or self.TDSWLOGSIG.value is not None:
             log10_sigma = self.TDSWLOGSIG.value
@@ -1444,6 +1581,76 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
             raise ValueError("TDSWDT and TDSWLOGSIG must be set for TimeDomainSqExpSWNoise")
 
         return log10_sigma, log10_ell, dt
+
+    def validate(self):
+        super().validate()
+
+        allowed_kinds = {
+            "linear",
+            "nearest",
+            "nearest-up",
+            "zero",
+            "slinear",
+            "quadratic",
+            "cubic",
+            "previous",
+            "next",
+        }
+        if self.TDSWINTERP_KIND.value not in allowed_kinds:
+            raise ValueError(
+                f"TimeDomainSqExpSWNoise TDSWINTERP_KIND must be one of {sorted(allowed_kinds)}."
+            )
+
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        node_values = []
+        for _, node_name in node_map.items():
+            node_val = getattr(self, node_name).value
+            if node_val is not None:
+                node_values.append(float(node_val))
+
+        has_nodes = len(node_values) > 0
+        dt_val = self.TDSWDT.value
+        has_nondefault_dt = dt_val is not None and dt_val != 30.0
+
+        if has_nodes and has_nondefault_dt:
+            raise ValueError(
+                "TimeDomainSqExpSWNoise requires exactly one interpolation mode: "
+                "set TDSWDT or set TDSWNODE_ parameters, but not both."
+            )
+
+        if 0 < len(node_values) < 2:
+            raise ValueError(
+                "TimeDomainSqExpSWNoise requires at least 2 TDSWNODE_ values when using "
+                "node-based interpolation. Set >=2 TDSWNODE_ parameters."
+            )
+
+        if len(node_values) >= 2:
+            nodes = np.asarray(node_values, dtype=float)
+            if not np.all(np.isfinite(nodes)):
+                raise ValueError("TimeDomainSqExpSWNoise TDSWNODE_ values must be finite.")
+            if len(np.unique(nodes)) != len(nodes):
+                raise ValueError("TimeDomainSqExpSWNoise TDSWNODE_ values must be unique.")
+        else:
+            if dt_val is not None and dt_val <= 0:
+                raise ValueError(
+                    "TimeDomainSqExpSWNoise TDSWDT must be set to a positive value."
+                )
+
+    def _get_sqexp_nodes(self, toas: TOAs) -> np.ndarray:
+        """Return interpolation nodes in MJD for TimeDomainSqExpSWNoise."""
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        nodes = []
+        for _, node_name in node_map.items():
+            node_par = getattr(self, node_name)
+            if node_par.value is not None:
+                nodes.append(float(node_par.value))
+
+        if len(nodes) >= 2:
+            return np.array(sorted(nodes), dtype=float)
+
+        raise ValueError(
+            "TimeDomainSqExpSWNoise node interpolation requires at least 2 TDSWNODE_ values."
+        )
 
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
         """Return a Fourier design matrix for red noise.
@@ -1455,8 +1662,18 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        (_, _, dt) = self.get_sqexp_vals()
-        Umat, _ = linear_interpolation_basis(t, nodes=None, dt= dt * 86400)
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        interp_kind = self.TDSWINTERP_KIND.value
+        has_nodes = any(
+            getattr(self, node_name).value is not None
+            for _, node_name in node_map.items()
+        )
+        if has_nodes:
+            nodes = self._get_sqexp_nodes(toas)
+            Umat, _ = linear_interpolation_basis(t, nodes=nodes, kind=interp_kind)
+        else:
+            dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
+            Umat, _ = linear_interpolation_basis(t, dt=dt * 86400, kind=interp_kind)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1471,8 +1688,19 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
         tbl = toas.table
         t = (tbl["tdbld"].quantity * u.day).to(u.s).value
 
-        (log10_sigma, log10_ell, dt) = self.get_sqexp_vals()
-        _, nodes = linear_interpolation_basis(t, nodes=None, dt=dt * 86400)
+        (log10_sigma, log10_ell, _) = self.get_sqexp_vals()
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        interp_kind = self.TDSWINTERP_KIND.value
+        has_nodes = any(
+            getattr(self, node_name).value is not None
+            for _, node_name in node_map.items()
+        )
+        if has_nodes:
+            nodes_in = self._get_sqexp_nodes(toas)
+            _, nodes = linear_interpolation_basis(t, nodes=nodes_in, kind=interp_kind)
+        else:
+            dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
+            _, nodes = linear_interpolation_basis(t, dt=dt * 86400, kind=interp_kind)
 
         return se_kernel(nodes, log10_sigma, log10_ell)
 
@@ -1516,6 +1744,7 @@ class TimeDomainQuasiPeriodicSWNoise(NoiseComponent):
                 name="TDSWDT",
                 units="",
                 aliases=[],
+                value=30.0,
                 description="Linear interpolation time step for time-domain noise.",
                 convert_tcb2tdb=False,
             )
@@ -1558,9 +1787,38 @@ class TimeDomainQuasiPeriodicSWNoise(NoiseComponent):
                 convert_tcb2tdb=False,
             )
         )
+        self.add_param(
+            strParameter(
+                name="TDSWINTERP_KIND",
+                value="linear",
+                description="Interpolation kind passed to scipy.interpolate.interp1d.",
+            )
+        )
+        self.add_param(
+            prefixParameter(
+                name="TDSWNODE_0001",
+                units="day",
+                value=None,
+                description="Interpolation node for time-domain SW noise basis (MJD).",
+                parameter_type="float",
+                convert_tcb2tdb=False,
+            )
+        )
 
         self.covariance_matrix_funcs += [self.quasi_periodic_sw_cov_matrix]
         self.basis_funcs += [self.quasi_periodic_sw_basis_weight_pair]
+
+    def add_tdsw_node_component(self, node, index=None):
+        """Add a TDSWNODE component.
+
+        Parameters
+        ----------
+        node : float or astropy.units.Quantity
+            Interpolation node in MJD (days).
+        index : int or None
+            Integer index label for the node. If None, increments max index by 1.
+        """
+        return _add_tdsw_node_component(self, node=node, index=index)
 
     def get_quasi_periodic_vals(self) -> Tuple[float, float, float, float, float]:
         """
@@ -1593,6 +1851,80 @@ class TimeDomainQuasiPeriodicSWNoise(NoiseComponent):
 
         return log10_sigma, log10_ell, log10_gamma_p, log10_p, dt
 
+    def validate(self):
+        super().validate()
+
+        allowed_kinds = {
+            "linear",
+            "nearest",
+            "nearest-up",
+            "zero",
+            "slinear",
+            "quadratic",
+            "cubic",
+            "previous",
+            "next",
+        }
+        if self.TDSWINTERP_KIND.value not in allowed_kinds:
+            raise ValueError(
+                f"TimeDomainQuasiPeriodicSWNoise TDSWINTERP_KIND must be one of {sorted(allowed_kinds)}."
+            )
+
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        node_values = []
+        for _, node_name in node_map.items():
+            node_val = getattr(self, node_name).value
+            if node_val is not None:
+                node_values.append(float(node_val))
+
+        has_nodes = len(node_values) > 0
+        dt_val = self.TDSWDT.value
+        has_nondefault_dt = dt_val is not None and dt_val != 30.0
+
+        if has_nodes and has_nondefault_dt:
+            raise ValueError(
+                "TimeDomainQuasiPeriodicSWNoise requires exactly one interpolation mode: "
+                "set TDSWDT or set TDSWNODE_ parameters, but not both."
+            )
+
+        if 0 < len(node_values) < 2:
+            raise ValueError(
+                "TimeDomainQuasiPeriodicSWNoise requires at least 2 TDSWNODE_ values when using "
+                "node-based interpolation. Set >=2 TDSWNODE_ parameters."
+            )
+
+        if len(node_values) >= 2:
+            nodes = np.asarray(node_values, dtype=float)
+            if not np.all(np.isfinite(nodes)):
+                raise ValueError(
+                    "TimeDomainQuasiPeriodicSWNoise TDSWNODE_ values must be finite."
+                )
+            if len(np.unique(nodes)) != len(nodes):
+                raise ValueError(
+                    "TimeDomainQuasiPeriodicSWNoise TDSWNODE_ values must be unique."
+                )
+        else:
+            if dt_val is not None and dt_val <= 0:
+                raise ValueError(
+                    "TimeDomainQuasiPeriodicSWNoise TDSWDT must be set to a positive value."
+                )
+
+    def _get_quasi_periodic_nodes(self, toas: TOAs) -> np.ndarray:
+        """Return interpolation nodes in MJD for TimeDomainQuasiPeriodicSWNoise."""
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        nodes = []
+        for _, node_name in node_map.items():
+            node_par = getattr(self, node_name)
+            if node_par.value is not None:
+                nodes.append(float(node_par.value))
+
+        if len(nodes) >= 2:
+            return np.array(sorted(nodes), dtype=float)
+
+        raise ValueError(
+            "TimeDomainQuasiPeriodicSWNoise node interpolation requires at least 2 TDSWNODE_ values."
+        )
+
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
         """Return a linear interpolation matrix for TimeDomainQuasiPeriodicSWNoise.
 
@@ -1604,8 +1936,18 @@ class TimeDomainQuasiPeriodicSWNoise(NoiseComponent):
         fref = 1400 * u.MHz
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
 
-        _, _, dt = self.get_quasi_periodic_vals()
-        Umat, _ = linear_interpolation_basis(t, nodes=None, dt=dt * 86400)
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        interp_kind = self.TDSWINTERP_KIND.value
+        has_nodes = any(
+            getattr(self, node_name).value is not None
+            for _, node_name in node_map.items()
+        )
+        if has_nodes:
+            nodes = self._get_quasi_periodic_nodes(toas)
+            Umat, _ = linear_interpolation_basis(t, nodes=nodes, kind=interp_kind)
+        else:
+            dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
+            Umat, _ = linear_interpolation_basis(t, dt=dt * 86400, kind=interp_kind)
         # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
         # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
@@ -1620,10 +1962,21 @@ class TimeDomainQuasiPeriodicSWNoise(NoiseComponent):
         tbl = toas.table
         t = (tbl["tdbld"].quantity * u.day).to(u.s).value
 
-        (log10_sigma, log10_ell, log10_gamma_p, log10_p, dt) = (
+        (log10_sigma, log10_ell, log10_gamma_p, log10_p, _) = (
             self.get_quasi_periodic_vals()
         )
-        _, nodes = linear_interpolation_basis(t, dt=dt * 86400)
+        node_map = self.get_prefix_mapping_component("TDSWNODE_")
+        interp_kind = self.TDSWINTERP_KIND.value
+        has_nodes = any(
+            getattr(self, node_name).value is not None
+            for _, node_name in node_map.items()
+        )
+        if has_nodes:
+            nodes_in = self._get_quasi_periodic_nodes(toas)
+            _, nodes = linear_interpolation_basis(t, nodes=nodes_in, kind=interp_kind)
+        else:
+            dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
+            _, nodes = linear_interpolation_basis(t, dt=dt * 86400, kind=interp_kind)
 
         return periodic_kernel(nodes, log10_sigma, log10_ell, log10_gamma_p, log10_p)
 
