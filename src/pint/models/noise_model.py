@@ -1231,16 +1231,7 @@ class RidgeSWNoise(NoiseComponent):
                 convert_tcb2tdb=False,
             )
         )
-        self.add_param(
-            prefixParameter(
-                name="TDSWNODE_0001",
-                units="day",
-                value=None,
-                description="Interpolation node for time-domain SW noise basis (MJD).",
-                parameter_type="float",
-                convert_tcb2tdb=False,
-            )
-        )
+
         self.add_param(
             floatParameter(
                 name="TDSWLOGSIG",
