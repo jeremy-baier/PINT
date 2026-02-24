@@ -665,7 +665,9 @@ class Residuals:
             if np.ndim(Phi) == 1:
                 Phi = np.append(Phi, [1e40])
             else:
-                phi_aug = np.zeros((Phi.shape[0] + 1, Phi.shape[1] + 1), dtype=Phi.dtype)
+                phi_aug = np.zeros(
+                    (Phi.shape[0] + 1, Phi.shape[1] + 1), dtype=Phi.dtype
+                )
                 phi_aug[:-1, :-1] = Phi
                 phi_aug[-1, -1] = 1e40
                 Phi = phi_aug

@@ -1254,6 +1254,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
         Fmat, phi = self.pl_rn_basis_weight_pair(toas)
         return project_basis_covariance(Fmat, phi)
 
+
 class TimeDomainRidgeSWNoise(NoiseComponent):
     """Ridge regression (white noise) time-domain kernel for the noise covariance matrix."""
 
@@ -1394,12 +1395,18 @@ class TimeDomainRidgeSWNoise(NoiseComponent):
         if len(node_values) >= 2:
             nodes = np.asarray(node_values, dtype=float)
             if not np.all(np.isfinite(nodes)):
-                raise ValueError("TimeDomainRidgeSWNoise TDSWNODE_ values must be finite.")
+                raise ValueError(
+                    "TimeDomainRidgeSWNoise TDSWNODE_ values must be finite."
+                )
             if len(np.unique(nodes)) != len(nodes):
-                raise ValueError("TimeDomainRidgeSWNoise TDSWNODE_ values must be unique.")
+                raise ValueError(
+                    "TimeDomainRidgeSWNoise TDSWNODE_ values must be unique."
+                )
         else:
             if dt_val is not None and dt_val <= 0:
-                raise ValueError("TimeDomainRidgeSWNoise TDSWDT must be set to a positive value.")
+                raise ValueError(
+                    "TimeDomainRidgeSWNoise TDSWDT must be set to a positive value."
+                )
 
     def _get_ridge_nodes(self, toas: TOAs) -> np.ndarray:
         """Return interpolation nodes in MJD for TimeDomainRidgeSWNoise."""
@@ -1578,7 +1585,9 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
             log10_sigma = self.TDSWLOGSIG.value
             log10_ell = self.TDSWLOGELL.value
         else:
-            raise ValueError("TDSWDT and TDSWLOGSIG must be set for TimeDomainSqExpSWNoise")
+            raise ValueError(
+                "TDSWDT and TDSWLOGSIG must be set for TimeDomainSqExpSWNoise"
+            )
 
         return log10_sigma, log10_ell, dt
 
@@ -1627,9 +1636,13 @@ class TimeDomainSqExpSWNoise(NoiseComponent):
         if len(node_values) >= 2:
             nodes = np.asarray(node_values, dtype=float)
             if not np.all(np.isfinite(nodes)):
-                raise ValueError("TimeDomainSqExpSWNoise TDSWNODE_ values must be finite.")
+                raise ValueError(
+                    "TimeDomainSqExpSWNoise TDSWNODE_ values must be finite."
+                )
             if len(np.unique(nodes)) != len(nodes):
-                raise ValueError("TimeDomainSqExpSWNoise TDSWNODE_ values must be unique.")
+                raise ValueError(
+                    "TimeDomainSqExpSWNoise TDSWNODE_ values must be unique."
+                )
         else:
             if dt_val is not None and dt_val <= 0:
                 raise ValueError(
@@ -2142,16 +2155,20 @@ def get_rednoise_freqs(
 
 
 def linear_interpolation_basis(
-        toas,
-        nodes=None,
-        dt=None,
-        kind="linear",
+    toas,
+    nodes=None,
+    dt=None,
+    kind="linear",
 ):
     if nodes is None:
         if dt is None:
-            raise ValueError("Must provide either nodes or dt for linear interpolation basis.")
-        t_min, t_max = np.min(toas)/86400, np.max(toas)/86400
-        nodes = np.arange(t_min, t_max + dt, dt) # FIXME : this may need to get improved.
+            raise ValueError(
+                "Must provide either nodes or dt for linear interpolation basis."
+            )
+        t_min, t_max = np.min(toas) / 86400, np.max(toas) / 86400
+        nodes = np.arange(
+            t_min, t_max + dt, dt
+        )  # FIXME : this may need to get improved.
     nodes = nodes * 86400  # MJD to seconds
     basis = np.identity(len(nodes))
     interp = interpolate.interp1d(
@@ -2254,5 +2271,5 @@ def ridge_kernel(nodes, log10_sigma=-7):
     r = np.abs(nodes[None, :] - nodes[:, None])
 
     # Convert to seconds
-    sigma = 10**(log10_sigma*2)
+    sigma = 10 ** (log10_sigma * 2)
     return np.eye(r.shape[0]) * sigma
