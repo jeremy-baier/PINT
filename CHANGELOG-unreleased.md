@@ -17,4 +17,5 @@ the released changes.
 - Method to zero out mean residual based on TZRMJD
 - Use VLBI astrometric measurements along with coordinate offset in the timing model
 ### Fixed
+- Fix docstring of `make_fake_toas_uniform`
 ### Removed
