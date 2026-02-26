@@ -622,7 +622,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
         fref = 1400 * u.MHz
         D = (fref.value / freqs.value) ** 2
-
+        #print("GETTING NOISE BASIS FOR PLDM NOISE")
         return Fmat * D[:, None]
 
     def get_noise_weights(self, toas: TOAs) -> np.ndarray:
@@ -633,7 +633,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
         (amp, gam, _, _, _) = self.get_plc_vals()
         _, f = self.get_time_frequencies(toas)
         df = np.diff(np.concatenate([[0], f]))
-
+        #print("GETTING NOISE WEIGHTS FOR PLDM NOISE")
         return powerlaw(f.repeat(2), amp, gam) * df.repeat(2)
 
     def pl_dm_basis_weight_pair(self, toas: TOAs) -> Tuple[np.ndarray, np.ndarray]:
@@ -1578,6 +1578,7 @@ def get_solar_conjunctions(
 
 def solar_conjunctions_interpolation_basis(
         toas,
+        freqs,
         planetssb,
         sunssb,
         pos_t,
@@ -1620,6 +1621,12 @@ def solar_conjunctions_interpolation_basis(
 
     # only return non-zero columns for rank reduction
     idx = M.sum(axis=0) != 0
+
+    # get solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion
+    solar_wind_geometry = self._parent.solar_wind_geometry(toas)
+    
+    # since this is the SW DM value if n_earth = 1 cm^-3. the GP will scale it.
+    dt_DM = (solar_wind_geometry * DMconst / (freqs**2)).value
 
     return M[:, idx], bin_edges[idx]
 
