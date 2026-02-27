@@ -2376,7 +2376,7 @@ def get_rednoise_freqs(
         # Log + linear: nlog log-freqs + nmodes linear-freqs
         freqs = _get_loglin_freqs(logmode, f_min, nlog, nmodes, Tspan)
 
-    return freqs
+    return np.asarray(freqs, dtype=np.float64)
 
 
 def linear_interpolation_basis(
@@ -2458,6 +2458,7 @@ def powerlaw(
     :param f_low_cut: Minimum frequency to include [Hz]
     :return: Power spectral density
     """
+    f = np.asarray(f, dtype=np.float64)
     f_low_cut = f_low_cut if f_low_cut is not None else np.min(f)
     above_fl = np.array(f >= f_low_cut, dtype=float)
 
@@ -2467,6 +2468,7 @@ def powerlaw(
 
 def periodic_kernel(nodes, log10_sigma=-7, log10_ell=2, log10_gam_p=0, log10_p=0):
     """Quasi-periodic kernel for DM"""
+    nodes = np.asarray(nodes, dtype=np.float64)
     r = np.abs(nodes[None, :] - nodes[:, None])
 
     # convert units to seconds
@@ -2481,6 +2483,7 @@ def periodic_kernel(nodes, log10_sigma=-7, log10_ell=2, log10_gam_p=0, log10_p=0
 
 def se_kernel(nodes, log10_sigma=-7, log10_ell=2):
     """Squared-exponential kernel"""
+    nodes = np.asarray(nodes, dtype=np.float64)
     r = np.abs(nodes[None, :] - nodes[:, None])
 
     # Convert everything into seconds
@@ -2499,6 +2502,7 @@ def matern_kernel(nodes, log10_sigma=-7, log10_ell=2, nu=1.5):
     if nu not in (0.5, 1.5, 2.5):
         raise ValueError("matern_kernel currently supports nu in {0.5, 1.5, 2.5}.")
 
+    nodes = np.asarray(nodes, dtype=np.float64)
     r = np.abs(nodes[None, :] - nodes[:, None])
 
     l = 10**log10_ell * 86400
@@ -2520,6 +2524,7 @@ def matern_kernel(nodes, log10_sigma=-7, log10_ell=2, nu=1.5):
 
 def ridge_kernel(nodes, log10_sigma=-7):
     """Ridge kernel for SW"""
+    nodes = np.asarray(nodes, dtype=np.float64)
     r = np.abs(nodes[None, :] - nodes[:, None])
 
     # Convert to seconds
