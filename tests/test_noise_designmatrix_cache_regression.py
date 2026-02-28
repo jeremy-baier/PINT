@@ -96,9 +96,7 @@ def test_noise_designmatrix_cache_multi_basis_hit_and_invalidation(monkeypatch):
 
             return wrapped_get_noise_basis
 
-        monkeypatch.setattr(
-            component, "get_noise_basis", make_wrapper(name, original)
-        )
+        monkeypatch.setattr(component, "get_noise_basis", make_wrapper(name, original))
 
     first = model.noise_model_designmatrix(toas)
     second = model.noise_model_designmatrix(toas)
