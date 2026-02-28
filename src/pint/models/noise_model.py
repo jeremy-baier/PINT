@@ -91,6 +91,11 @@ def project_basis_covariance(U: np.ndarray, Phi: np.ndarray) -> np.ndarray:
     return np.dot(U, np.dot(Phi, U.T))
 
 
+def get_tdb_seconds(tbl) -> np.ndarray:
+    """Return TOA TDB times in seconds as float64."""
+    return np.asarray((tbl["tdbld"].quantity * u.day).to(u.s).value, dtype=np.float64)
+
+
 def _add_tdsw_node_component(model, node, index=None):
     """Add one TDSWNODE_ prefix parameter to a time-domain SW noise component."""
     dct = model.get_prefix_mapping_component("TDSWNODE_")
@@ -494,7 +499,7 @@ class EcorrNoise(CorrelatedNoiseComponent):
         A quantization matrix maps TOAs to observing epochs.
         """
         tbl = toas.table
-        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+        t = get_tdb_seconds(tbl)
         ecorrs = self.get_ecorrs()
         umats = []
         for ec in ecorrs:
@@ -520,7 +525,7 @@ class EcorrNoise(CorrelatedNoiseComponent):
         """
         ecorrs = self.get_ecorrs()
         if nweights is None:
-            ts = (toas.table["tdbld"].quantity * u.day).to(u.s).value
+            ts = get_tdb_seconds(toas.table)
             nweights = [
                 get_ecorr_nweights(ts[ec.select_toa_mask(toas)]) for ec in ecorrs
             ]
@@ -660,7 +665,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
         """Return the frequencies of the noise model"""
 
         tbl = toas.table
-        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+        t = get_tdb_seconds(tbl)
         T = (
             np.max(t) - np.min(t)
             if self.TNDMTSPAN.quantity is None
@@ -825,7 +830,7 @@ class PLSWNoise(CorrelatedNoiseComponent):
         """Return the frequencies of the noise model"""
 
         tbl = toas.table
-        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+        t = get_tdb_seconds(tbl)
         T = np.max(t) - np.min(t)
 
         (_, _, n_lin, n_log, f_min_ratio) = self.get_plc_vals()
@@ -1004,7 +1009,7 @@ class PLChromNoise(CorrelatedNoiseComponent):
         """Return the frequencies of the noise model"""
 
         tbl = toas.table
-        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+        t = get_tdb_seconds(tbl)
         T = (
             np.max(t) - np.min(t)
             if self.TNCHROMTSPAN.quantity is None
@@ -1203,7 +1208,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
         """Return the frequencies of the noise model"""
 
         tbl = toas.table
-        t = (tbl["tdbld"].quantity * u.day).to(u.s).value
+        t = get_tdb_seconds(tbl)
         T = (
             np.max(t) - np.min(t)
             if self.TNREDTSPAN.quantity is None
