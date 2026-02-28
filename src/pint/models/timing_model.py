@@ -1802,12 +1802,34 @@ class TimingModel:
         derr = self.scaled_dm_uncertainty(toas).to_value(pint.dmu)
         return np.hstack((terr, derr))
 
+    def _noise_designmatrix_cache_key(self, toas: TOAs) -> Tuple[int, int, Tuple]:
+        """Build a cache key for noise design-matrix evaluation."""
+        noise_params = self.get_params_of_component_type("NoiseComponent")
+        noise_state = []
+        for pname in noise_params:
+            par = getattr(self, pname)
+            noise_state.append(
+                (
+                    pname,
+                    repr(getattr(par, "quantity", None)),
+                    repr(getattr(par, "key", None)),
+                    repr(getattr(par, "key_value", None)),
+                )
+            )
+        return (id(toas), len(toas), tuple(noise_state))
+
     def noise_model_designmatrix(self, toas: TOAs) -> np.ndarray:
         """Returns the joint design/basis matrix for all noise components."""
         if len(self.basis_funcs) == 0:
             return None
+        key = self._noise_designmatrix_cache_key(toas)
+        cache = getattr(self, "_noise_designmatrix_cache", None)
+        if cache is not None and cache.get("key") == key:
+            return cache["U"]
         result = [nf(toas)[0] for nf in self.basis_funcs]
-        return np.hstack(result)
+        U = np.hstack(result)
+        self._noise_designmatrix_cache = {"key": key, "U": U}
+        return U
 
     def noise_model_dm_designmatrix(self, toas: TOAs) -> np.ndarray:
         """Returns the design/basis matrix for all noise components for wideband DMs.
