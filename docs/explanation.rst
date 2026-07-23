@@ -270,7 +270,9 @@ Here are some examples for `DMJUMP` parameters in a par file:
 
 Similar offsets also arise in the case of narrowband TOAs. Unlike the wideband case, these offsets 
 manifest as system-dependent corrections to the DM delay. They are modeled using the `FDJUMPDM` parameters
-(see see :class:`pint.models.dispersion_model.FDJumpDM`)
+(see :class:`pint.models.dispersion_model.FDJumpDM`).
+A positive `FDJUMPDM` contributes a positive DM (and thus a positive dispersion delay) on the
+selected TOAs, matching the Tempo2 convention.
 
 Here are some examples for `FDJUMPDM` parameters in a par file:
     `FDJUMPDM   -f 430_PUPPI       1e-4  1   1e-5`

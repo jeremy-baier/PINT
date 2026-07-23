@@ -141,4 +141,5 @@ def test_fdjumpdm_offset(model_and_toas):
     dm2 = model2.total_dm(toas)
 
     assert np.allclose((dm1 - dm2)[not_mask], 0)
-    assert np.allclose((dm1 - dm2)[mask], -model.FDJUMPDM1.quantity)
+    # Positive FDJUMPDM adds positive DM (Tempo2-consistent convention).
+    assert np.allclose((dm1 - dm2)[mask], model.FDJUMPDM1.quantity)
