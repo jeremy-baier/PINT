@@ -94,3 +94,31 @@ def test_ddh_sim():
     assert np.isclose(f.resids.calc_chi2(), f2.resids.calc_chi2(), atol=0.5)
     assert np.isclose(f.model.M2.value, f2.model.M2.value, atol=0.01)
     assert np.isclose(f.model.SINI.value, f2.model.SINI.value, atol=0.01)
+
+
+def test_ddh_sim_negativeH3():
+    m = get_model(
+        io.StringIO(
+            f"{parDD}\nBINARY DD\nSINI {np.sin(i).value}\nA1 {A1.value}\nPB {PB.value}\nM2 {Mc.value}\n"
+        )
+    )
+    t = pint.simulation.make_fake_toas_uniform(55000, 55100, 1000, m, add_noise=True)
+    m2 = pint.binaryconvert.convert_binary(m, "DDH")
+    for p in m.free_params:
+        if p not in ["M2", "SINI"]:
+            getattr(m, p).frozen = True
+    for p in m2.free_params:
+        if p not in ["H3", "STIGMA"]:
+            getattr(m2, p).frozen = True
+    m.M2.frozen = False
+    m.SINI.frozen = False
+    m2.H3.frozen = False
+    m2.STIGMA.frozen = False
+    f = pint.fitter.Fitter.auto(t, m)
+    f2 = pint.fitter.Fitter.auto(t, m2)
+    f.fit_toas()
+    f2.model.H3.value = -f2.model.H3.value
+    f2.fit_toas(maxiter=20)
+    assert np.isclose(f.resids.calc_chi2(), f2.resids.calc_chi2(), atol=1)
+    assert np.isclose(f.model.M2.value, f2.model.M2.value, atol=0.01)
+    assert np.isclose(f.model.SINI.value, f2.model.SINI.value, atol=0.01)
