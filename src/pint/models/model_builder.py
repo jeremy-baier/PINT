@@ -121,6 +121,7 @@ class ModelBuilder:
         allow_T2=False,
         force_binary_model=None,
         toas_for_tzr=None,
+        ell1h_shapiro="full",
         **kwargs,
     ):
         """Callable object for making a timing model from .par file.
@@ -155,6 +156,11 @@ class ModelBuilder:
         toas_for_tzr : TOAs or None, optional
             If this is not None, a TZR TOA (AbsPhase) will be created using the
             given TOAs object.
+
+        ell1h_shapiro : {"full", "absorbed"}, optional
+            Freire & Wex convention for ELL1H with H3+STIGMA. "full" (default)
+            uses Eq. (29). "absorbed" uses Eq. (28), matching Tempo2 ELL1H/T2
+            mode 1. Ignored for ELL1H models that are not on the H3+STIGMA path.
 
         kwargs : dict
             Any additional parameter/value pairs that will add to or override those in the parfile.
@@ -206,6 +212,13 @@ class ModelBuilder:
         # Make timing model
         cps = [self.all_components.components[c] for c in selected]
         tm = TimingModel(components=cps)
+        if ell1h_shapiro not in ("full", "absorbed"):
+            raise ValueError(
+                "ell1h_shapiro must be 'full' or 'absorbed', " f"got {ell1h_shapiro!r}"
+            )
+        if "BinaryELL1H" in tm.components:
+            tm.components["BinaryELL1H"].ell1h_shapiro = ell1h_shapiro
+
         self._setup_model(
             tm,
             pint_param_dict,
@@ -249,6 +262,7 @@ class ModelBuilder:
         tm.meta["allow_tcb"] = allow_tcb_
         tm.meta["convert_tcb"] = convert_tcb
         tm.meta["allow_T2"] = allow_T2
+        tm.meta["ell1h_shapiro"] = ell1h_shapiro
 
         return tm
 
@@ -779,6 +793,7 @@ def get_model(
     allow_T2: bool = False,
     force_binary_model: str = None,
     toas_for_tzr: TOAs = None,
+    ell1h_shapiro: str = "full",
     **kwargs,
 ) -> TimingModel:
     """A one step function to build model from a parfile.
@@ -814,6 +829,11 @@ def get_model(
         If this is not None, a TZR TOA (AbsPhase) will be created using the
         given TOAs object.
 
+    ell1h_shapiro : {"full", "absorbed"}, optional
+        Freire & Wex convention for ELL1H with H3+STIGMA. "full" (default)
+        uses Eq. (29). "absorbed" uses Eq. (28), matching Tempo2 ELL1H/T2
+        mode 1. Ignored for ELL1H models that are not on the H3+STIGMA path.
+
     kwargs : dict
         Any additional parameter/value pairs that will add to or override those in the parfile.
 
@@ -834,6 +854,7 @@ def get_model(
             allow_T2=allow_T2,
             force_binary_model=force_binary_model,
             toas_for_tzr=toas_for_tzr,
+            ell1h_shapiro=ell1h_shapiro,
             **kwargs,
         )
 
@@ -847,6 +868,7 @@ def get_model(
         allow_T2=allow_T2,
         force_binary_model=force_binary_model,
         toas_for_tzr=toas_for_tzr,
+        ell1h_shapiro=ell1h_shapiro,
         **kwargs,
     )
     model.name = parfile
@@ -872,6 +894,7 @@ def get_model_and_toas(
     allow_T2: bool = False,
     force_binary_model: str = None,
     add_tzr_to_model: bool = True,
+    ell1h_shapiro: str = "full",
     **kwargs,
 ) -> Tuple[TimingModel, TOAs]:
     """Load a timing model and a related TOAs, using model commands as needed
@@ -928,6 +951,10 @@ def get_model_and_toas(
     add_tzr_to_model : bool, optional
         Create a TZR TOA in the timing model using the created TOAs object. Default is
         True.
+    ell1h_shapiro : {"full", "absorbed"}, optional
+        Freire & Wex convention for ELL1H with H3+STIGMA. "full" (default)
+        uses Eq. (29). "absorbed" uses Eq. (28), matching Tempo2 ELL1H/T2
+        mode 1. Ignored for ELL1H models that are not on the H3+STIGMA path.
     kwargs : dict
         Any additional parameter/value pairs that will add to or override those in the parfile.
 
@@ -942,6 +969,7 @@ def get_model_and_toas(
         allow_tcb=allow_tcb,
         allow_T2=allow_T2,
         force_binary_model=force_binary_model,
+        ell1h_shapiro=ell1h_shapiro,
         **kwargs,
     )
 
