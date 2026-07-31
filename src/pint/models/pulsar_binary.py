@@ -381,17 +381,11 @@ class PulsarBinary(DelayComponent):
             hasattr(self, "SINI")
             and self.SINI.value is not None
             and not 0 <= self.SINI.value <= 1
-            and not isinstance(self.SINI, funcParameter)
         ):
             raise ValueError(
                 f"Sine of inclination angle must be between zero and one ({self.SINI.quantity})"
             )
-        if (
-            hasattr(self, "M2")
-            and self.M2.value is not None
-            and self.M2.value < 0
-            and not isinstance(self.M2, funcParameter)
-        ):
+        if hasattr(self, "M2") and self.M2.value is not None and self.M2.value < 0:
             raise ValueError(
                 f"Companion mass M2 cannot be negative ({self.M2.quantity})"
             )
