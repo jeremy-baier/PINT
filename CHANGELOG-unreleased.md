@@ -22,6 +22,7 @@ the released changes.
 - `ssb_to_psb_xyz_ECL` and `ssb_to_psb_xyz_ICRS` are now cached
 ### Fixed
 - Precision tests / MJD string length on platforms with true `float128` `longdouble` (e.g. Linux aarch64): stop truncating via a fixed `U30` dtype and emit enough digits for `str(longdouble)`
+- Prefer DD over BT when guessing the binary model for Tempo2 `T2` par files (`allow_T2`), matching Tempo2's `allTerms=1` behavior
 - `WidebandTOAFitter` raises a warning if the model has correlated errors (It used to give wrong results before).
 - Fixed bug where "include_bipm" flag was being ignored when loading Fermi TOAs with weights, now defaults to using EPHEM, CLOCK and PLANET_SHAPIRO from the timing model
 - When flags are created based off jumps uses strings instead of None
@@ -38,4 +39,5 @@ the released changes.
 - `make_fake_toas_fromMJDs` now does not assume `PLANET_SHAPIRO` is in the model - it checks.
 - Make VLBI frame rotation work correctly when proper motion is present.
 - Changed some API to pass Mac CI
+- Log-separated frequency computation for red noise components.
 ### Removed
