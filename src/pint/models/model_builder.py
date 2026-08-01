@@ -35,10 +35,14 @@ from pint.utils import get_unit, interesting_lines, lines_of, split_prefixed_nam
 __all__ = ["ModelBuilder", "get_model", "get_model_and_toas"]
 
 default_models = ["StandardTimingModel"]
+# Prefer the most specific model that still covers every binary parameter in the
+# par file. Order matters when several models are allowed: Tempo2's T2 with
+# Keplerian parameters (T0/ECC/OM) matches DD (allTerms=1), not BT, so DD must
+# precede BT. DD-family extensions (DDK/DDGR/DDS/DDH) must follow bare DD so a
+# plain Keplerian T2 does not map to DDK/DDH merely because those models also
+# accept T0/ECC/OM.
 _binary_model_priority = [
     "Isolated",
-    "BT",
-    "BT_piecewise",
     "ELL1",
     "ELL1H",
     "ELL1k",
@@ -47,6 +51,8 @@ _binary_model_priority = [
     "DDGR",
     "DDS",
     "DDH",
+    "BT",
+    "BT_piecewise",
 ]
 
 
