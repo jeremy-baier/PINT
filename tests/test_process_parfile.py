@@ -183,6 +183,23 @@ SINI KIN
 #SINI 0.95
 """
 
+# Keplerian T2: BT and DD both cover these parameters, but Tempo2 T2
+# (allTerms=1) matches DD, so DD must win over BT.
+dd_par = """
+PSR J1234+5678
+ELAT 0 1 2
+ELONG 0 1 3
+F0 1 1 5
+DM 10 0 3
+PEPOCH 57000
+BINARY T2
+PB 60
+T0 54300
+A1 30
+OM 150
+ECC 8.0e-05
+"""
+
 ell1h_par = """
 PSR J1234+5678
 ELAT 0 1 2
@@ -222,9 +239,9 @@ H4 1.0e-07
 
 
 def test_guess_binary_model():
-    parfiles = [base_par, ddk_par, ell1h_par, nobinarymodel_par]
-    binary_models = ["Isolated", "DDK", "ELL1H", None]
-    trip_raise = [False, True, True, True]
+    parfiles = [base_par, ddk_par, dd_par, ell1h_par, nobinarymodel_par]
+    binary_models = ["Isolated", "DDK", "DD", "ELL1H", None]
+    trip_raise = [False, True, True, True, True]
 
     for parfile, binary_model, trip in zip(parfiles, binary_models, trip_raise):
         par_dict = parse_parfile(StringIO(parfile))
