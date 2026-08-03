@@ -19,6 +19,8 @@ from pint.models.stand_alone_psr_binaries.ELL1H_model import ELL1Hmodel
 from pint.models.stand_alone_psr_binaries.ELL1k_model import ELL1kmodel
 from pint.utils import taylor_horner_deriv
 
+_ELL1H_SHAPIRO_MODES = ("full", "absorbed")
+
 
 def _eps_to_e(eps1, eps2):
     return np.sqrt(eps1**2 + eps2**2)
@@ -325,7 +327,7 @@ class BinaryELL1H(BinaryELL1):
     When `H3` and `H4` are supplied, `NHARMS` is taken to be `max(7,NHARMS)`, and the approximate version is used (Eqn. 19) appropriate for medium inclinations.
     Note that the default value in `pint` for `NHARMS` is 7, while in `tempo2` it is 4.
 
-    When `H3` and `STIGMA` are supplied, `NHARMS` is ignored since the exact version is used (Eqn. 29) appropriate for very high inclinations.
+    When `H3` and `STIGMA` are supplied, `NHARMS` is ignored and an exact Freire & Wex form is used. PINT's default is Eqn. (29) (``ell1h_shapiro="full"``), which keeps all harmonics inside the Shapiro term. Tempo2's ELL1H / T2 mode 1 uses Eqn. (28) (``ell1h_shapiro="absorbed"``), which leaves harmonics 1–2 to be absorbed into the ELL1 Roemer delay. Select the Tempo2-compatible form via ``get_model(..., ell1h_shapiro="absorbed")``. The default is unchanged for compatibility with existing PINT solutions.
 
     References
     ----------
@@ -340,6 +342,11 @@ class BinaryELL1H(BinaryELL1):
         super().__init__()
         self.binary_model_name = "ELL1H"
         self.binary_model_class = ELL1Hmodel
+
+        # Freire & Wex H3+STIGMA Shapiro convention. "full" = Eq. (29) (default);
+        # "absorbed" = Eq. (28) (Tempo2 ELL1H/T2 mode 1). Set by ModelBuilder /
+        # get_model before setup(); setup() must honour it.
+        self.ell1h_shapiro = "full"
 
         self.add_param(
             floatParameter(
@@ -408,7 +415,20 @@ class BinaryELL1H(BinaryELL1):
                 log.warning(
                     f"Requested NHARMS={self.NHARMS.value} will be ignored, since will use exact parameterization with STIGMA specified"
                 )
-            self.binary_instance.ds_func = self.binary_instance.delayS_H3_STIGMA_exact
+            mode = getattr(self, "ell1h_shapiro", "full")
+            if mode not in _ELL1H_SHAPIRO_MODES:
+                raise ValueError(
+                    "ell1h_shapiro must be one of "
+                    f"{_ELL1H_SHAPIRO_MODES}, got {mode!r}"
+                )
+            if mode == "absorbed":
+                self.binary_instance.ds_func = (
+                    self.binary_instance.delayS3p_H3_STIGMA_exact
+                )
+            else:
+                self.binary_instance.ds_func = (
+                    self.binary_instance.delayS_H3_STIGMA_exact
+                )
             if self.STIGMA.quantity <= 0:
                 if not self.H3.value == 0:
                     raise ValueError("STIGMA must be greater than zero.")
