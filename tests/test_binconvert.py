@@ -29,9 +29,7 @@ def _assert_roundtrip_value(p, m, mback):
         a = np.longdouble(v0)
         b = np.longdouble(v1)
         atol = np.finfo(np.float64).eps * max(abs(float(a)), abs(float(b)), 1.0)
-        assert np.isclose(a, b, rtol=0.0, atol=atol), (
-            f"{p}: {v0} does not match {v1}"
-        )
+        assert np.isclose(a, b, rtol=0.0, atol=atol), f"{p}: {v0} does not match {v1}"
     else:
         assert np.isclose(v0, v1), f"{p}: {v0} does not match {v1}"
 
