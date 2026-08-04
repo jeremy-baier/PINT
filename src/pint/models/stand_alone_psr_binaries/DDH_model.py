@@ -106,8 +106,6 @@ class DDHmodel(DDmodel):
             dH3_dpar = self.prtl_der("H3", par)
             dsDelay_dH3 = -2 * np.log(logNum) / self.STIGMA**3
             dSTIGMA_dpar = self.prtl_der("STIGMA", par)
-            # H3 is already in seconds; do not divide by Tsun here.
-            # d(logNum)/dSTIGMA via SINI = 2*STIGMA/(1+STIGMA**2).
             dSINI_dSTIGMA = 2 * (1 - self.STIGMA**2) / (1 + self.STIGMA**2) ** 2
             d_logNum_d_STIGMA = -dSINI_dSTIGMA * geo
             dsDelay_dSTIGMA = (
