@@ -94,3 +94,29 @@ def test_ddh_sim():
     assert np.isclose(f.resids.calc_chi2(), f2.resids.calc_chi2(), atol=0.5)
     assert np.isclose(f.model.M2.value, f2.model.M2.value, atol=0.01)
     assert np.isclose(f.model.SINI.value, f2.model.SINI.value, atol=0.01)
+
+
+def test_ddh_stigma_derivative_matches_finite_difference():
+    """Analytic ∂delay/∂STIGMA (and H3) must match PINT's numerical derivative.
+
+    Regression for a spurious ``/ Tsun.value`` factor formerly present in
+    ``DDHmodel.d_delayS_d_par`` for STIGMA (analytic column was ~1/Tsun too
+    large). H3 is a non-regression control. Compare RMS ratios so a few
+    superior-conjunction TOAs do not dominate the check.
+    """
+    m = get_model(
+        io.StringIO(
+            f"{parDD}\nBINARY DD\nSINI {np.sin(i).value}\nA1 {A1.value}\n"
+            f"PB {PB.value}\nM2 {Mc.value}\n"
+        )
+    )
+    t = pint.simulation.make_fake_toas_uniform(
+        50000, 51000, 200, m, add_noise=False, error=1 * u.us
+    )
+    m2 = pint.binaryconvert.convert_binary(m, "DDH")
+
+    for param in ("STIGMA", "H3"):
+        analytic = m2.d_delay_d_param(t, param)
+        numerical = m2.d_delay_d_param_num(t, param)
+        rms_ratio = np.sqrt(np.mean(analytic**2)) / np.sqrt(np.mean(numerical**2))
+        assert abs(rms_ratio - 1.0) < 1e-3
