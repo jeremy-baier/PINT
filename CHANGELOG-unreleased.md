@@ -20,6 +20,7 @@ the released changes.
 - `ssb_to_psb_xyz_ECL` and `ssb_to_psb_xyz_ICRS` are now cached
 - ELL1H with H3+STIGMA: add opt-in ``ell1h_shapiro="absorbed"`` to select Freire & Wex Eq. (28) (Tempo2 ELL1H/T2 mode 1). Default remains Eq. (29) ``"full"`` (`get_model` / `get_model_and_toas` / `ModelBuilder`).
 ### Fixed
+- Jodrell Bank Mark II sites (``jbmk2`` / ``jbmk2roach`` / ``jbmk2dfb``) now follow TEMPO2's clock routing (equivalent to ``jbafb`` / ``jbroach`` / ``jbdfb``) instead of the default empty TEMPO clock path.
 - Align ``d_delayS3p_H3_STIGMA_exact_d_STIGMA`` with Eq. (28): ``cos(2*Phi)``.
 - Prefer DD over BT when guessing the binary model for Tempo2 `T2` par files (`allow_T2`), matching Tempo2's `allTerms=1` behavior
 - `WidebandTOAFitter` raises a warning if the model has correlated errors (It used to give wrong results before).
