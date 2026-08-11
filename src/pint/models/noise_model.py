@@ -669,7 +669,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
         T = (
             np.max(t) - np.min(t)
             if self.TNDMTSPAN.quantity is None
-            else self.TNDMTSPAN.quantity
+            else self.TNDMTSPAN.quantity.to_value(u.s)
         )
 
         (_, _, n_lin, n_log, f_min_ratio) = self.get_plc_vals()
@@ -1013,7 +1013,7 @@ class PLChromNoise(CorrelatedNoiseComponent):
         T = (
             np.max(t) - np.min(t)
             if self.TNCHROMTSPAN.quantity is None
-            else self.TNCHROMTSPAN.quantity
+            else self.TNCHROMTSPAN.quantity.to_value(u.s)
         )
 
         (_, _, n_lin, n_log, f_min_ratio) = self.get_plc_vals()
@@ -1210,9 +1210,9 @@ class PLRedNoise(CorrelatedNoiseComponent):
         tbl = toas.table
         t = get_tdb_seconds(tbl)
         T = (
-            np.max(t) - np.min(t)
+            (np.max(t) - np.min(t))
             if self.TNREDTSPAN.quantity is None
-            else self.TNREDTSPAN.quantity
+            else self.TNREDTSPAN.quantity.to_value(u.s)
         )
 
         (_, _, n_lin, n_log, f_min_ratio) = self.get_plc_vals()
@@ -1840,19 +1840,22 @@ def get_rednoise_freqs(
 
         # Log portion
         f_log = np.logspace(
-            np.log10(f_min_), np.log10((1 + logmode_) / T), n_log, endpoint=False
+            np.log10(f_min_),
+            np.log10(f_min_lin),
+            n_log,
+            endpoint=False,
         )
 
         # Combine log + linear
         return np.concatenate((f_log, f_lin))
 
-    have_logmode = logmode is not None and logmode > 0
+    have_logmode = logmode is not None and logmode >= 0
     have_nlog = nlog is not None and nlog > 0
     have_fmin = f_min is not None and f_min > 0
 
     use_log = all([have_logmode, have_nlog, have_fmin])
 
-    if not use_log and (have_logmode or have_nlog):
+    if (not use_log) and have_nlog:
         log.warning(
             "Log-linear frequency spacing appears to be "
             "incorrectly specified. Got logmode={logmode}, "

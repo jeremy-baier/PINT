@@ -20,15 +20,26 @@ class ELL1Hmodel(ELL1BaseModel):
 
     .. math::
 
-        \\Delta_S = -2r \\left( \\frac{a_0}{2} + \\Sum_k (a_k \\cos k\\phi + b_k \\sin k \phi) \\right)
+        \\Delta_S = -2r \\left( \\frac{a_0}{2} + \\sum_k (a_k \\cos k\\phi + b_k \\sin k\\phi) \\right)
 
-    The first two harmonics are generlly absorbed by the ELL1 Roemer delay.
-    Thus, :class:`~pint.models.binary_ell1.BinaryELL1H` uses the series from the third
-    harmonic and higher.
+    For the approximate ``H3`` / ``H3``+``H4`` paths, the first two harmonics are
+    generally absorbed by the ELL1 Roemer delay, so those modes use the series from
+    the third harmonic and higher (Freire & Wex Eq. 19).
+
+    With ``H3`` and ``STIGMA``, two exact Freire & Wex forms are available, selected
+    by :func:`~pint.models.get_model`'s ``ell1h_shapiro`` argument (via
+    :class:`~pint.models.binary_ell1.BinaryELL1H`):
+
+    * ``"full"`` (default): Eq. (29), ``delayS_H3_STIGMA_exact`` — the full
+      orthometric log, with all harmonics kept in the Shapiro term.
+    * ``"absorbed"``: Eq. (28), ``delayS3p_H3_STIGMA_exact`` — Shapiro from the
+      third harmonic upward (Tempo2 ELL1H / T2 mode 1), leaving harmonics 1–2 to
+      be absorbed into the ELL1 Roemer delay.
 
     Notes
     -----
     Default value in `pint` for `NHARMS` is 7, while in `tempo2` it is 4.
+    ``NHARMS`` is ignored on the ``H3``+``STIGMA`` exact paths.
 
     References
     ----------
@@ -332,7 +343,7 @@ class ELL1Hmodel(ELL1BaseModel):
                 -3 * np.log(lognum)
                 + 2 * stigma * (stigma - np.sin(Phi)) / lognum
                 - 4 * stigma * np.sin(Phi)
-                + stigma**2 * np.cos(Phi)
+                + stigma**2 * np.cos(2 * Phi)
             )
         )
 
