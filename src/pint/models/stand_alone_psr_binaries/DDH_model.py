@@ -99,37 +99,18 @@ class DDHmodel(DDmodel):
         cOmega = np.cos(self.omega())
         TM2 = self.M2.value * Tsun
 
-        logNum = (
-            1
-            - e * cE
-            - self.SINI * (sOmega * (cE - e) + (1 - e**2) ** 0.5 * cOmega * sE)
-        )
+        # Geometric factor in the Shapiro log argument (same as DD).
+        geo = sOmega * (cE - e) + (1 - e**2) ** 0.5 * cOmega * sE
+        logNum = 1 - e * cE - self.SINI * geo
         with u.set_enabled_equivalencies(u.dimensionless_angles()):
             dH3_dpar = self.prtl_der("H3", par)
             dsDelay_dH3 = -2 * np.log(logNum) / self.STIGMA**3
             dSTIGMA_dpar = self.prtl_der("STIGMA", par)
-            dsDelay_dSTIGMA = 6 * self.H3 / self.STIGMA**4 / Tsun.value * np.log(
-                1
-                - e * cE
-                - 2
-                * self.STIGMA
-                / (self.STIGMA**2 + 1)
-                * (sOmega * (cE - e) + (-(e**2) + 1) ** 0.5e0 * cOmega * sE)
-            ) - 2 * self.H3 / self.STIGMA**3 / Tsun.value * (
-                -2
-                / (self.STIGMA**2 + 1)
-                * (sOmega * (cE - e) + (-(e**2) + 1) ** 0.5e0 * cOmega * sE)
-                + 4
-                * self.STIGMA**2
-                / (self.STIGMA**2 + 1) ** 2
-                * (sOmega * (cE - e) + (-(e**2) + 1) ** 0.5e0 * cOmega * sE)
-            ) / (
-                1
-                - e * cE
-                - 2
-                * self.STIGMA
-                / (self.STIGMA**2 + 1)
-                * (sOmega * (cE - e) + (-(e**2) + 1) ** 0.5e0 * cOmega * sE)
+            dSINI_dSTIGMA = 2 * (1 - self.STIGMA**2) / (1 + self.STIGMA**2) ** 2
+            d_logNum_d_STIGMA = -dSINI_dSTIGMA * geo
+            dsDelay_dSTIGMA = (
+                6 * self.H3 / self.STIGMA**4 * np.log(logNum)
+                - 2 * self.H3 / self.STIGMA**3 * d_logNum_d_STIGMA / logNum
             )
 
             decc_dpar = self.prtl_der("ecc", par)
