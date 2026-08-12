@@ -1409,37 +1409,73 @@
         ],
         "tempo_code": "h",
         "itoa_code": "J2",
+        "clock_file": "",
+        "clock_fmt": "tempo2",
+        "apply_gps2utc": true,
+        "bogus_last_correction": true,
         "itrf_xyz": [
             3822846.76,
             -153802.28,
             5086285.9
         ],
         "fullname": "The Mark II telescope at Jodrell Bank Observatory",
-        "origin": "Imported from TEMPO2 observatories.dat 2021 June 7."
+        "origin": [
+            "Imported from TEMPO2 observatories.dat 2021 June 7.",
+            "TEMPO2 routes this site through the zero-offset alias jbmk22jb.clk to jbafb;",
+            "jbafb has no additional instrument clock file, so PINT applies only GPS/BIPM."
+        ]
     },
     "jb_mkii_rch": {
         "aliases": [
             "jbmk2roach"
         ],
+        "clock_file": [
+            {
+                "name": "jbroach2jb.clk",
+                "valid_beyond_ends": true
+            },
+            "jb2gps.clk"
+        ],
+        "clock_fmt": "tempo2",
+        "apply_gps2utc": true,
+        "bogus_last_correction": true,
         "itrf_xyz": [
             3822846.76,
             -153802.28,
             5086285.9
         ],
         "fullname": "The Mark II telescope at Jodrell Bank Observatory with the Roach backend",
-        "origin": "Imported from TEMPO2 observatories.dat 2021 June 7."
+        "origin": [
+            "Imported from TEMPO2 observatories.dat 2021 June 7.",
+            "TEMPO2 routes this site through the zero-offset alias jbmk2roach2jbroach.clk",
+            "onto the Lovell Roach chain; PINT uses that jbroach2jb.clk + jb2gps.clk chain directly."
+        ]
     },
     "jb_mkii_dfb": {
         "aliases": [
             "jbmk2dfb"
         ],
+        "clock_file": [
+            {
+                "name": "jbdfb2jb.clk",
+                "valid_beyond_ends": true
+            },
+            "jb2gps.clk"
+        ],
+        "clock_fmt": "tempo2",
+        "apply_gps2utc": true,
+        "bogus_last_correction": true,
         "itrf_xyz": [
             3822846.76,
             -153802.28,
             5086285.9
         ],
         "fullname": "The Mark II telescope at Jodrell Bank Observatory with the DFB backend",
-        "origin": "Imported from TEMPO2 observatories.dat 2021 June 7."
+        "origin": [
+            "Imported from TEMPO2 observatories.dat 2021 June 7.",
+            "TEMPO2 routes this site through the zero-offset alias jbmk2dfb2jbdfb.clk",
+            "onto the Lovell DFB chain; PINT uses that jbdfb2jb.clk + jb2gps.clk chain directly."
+        ]
     },
     "lwa_sv": {
         "aliases": [

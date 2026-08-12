@@ -137,6 +137,9 @@ good_observatories = [
     "jodrell",
     "jbroach",
     "jbdfb",
+    "jbmk2roach",
+    "jbmk2dfb",
+    "jbmk2",
     "wsrt",
     "parkes",
 ]
@@ -321,6 +324,40 @@ def test_valid_past_end():
     o = pint.observatory.get_observatory("jbroach")
     o.last_clock_correction_mjd()
     o.clock_corrections(o._clock[0].time[-1] + 1 * u.d, limits="error")
+
+
+def _clock_file_names(obs):
+    return [f["name"] if isinstance(f, dict) else f for f in obs.clock_files]
+
+
+def test_jb_mkii_sites_use_tempo2_clock_chains():
+    """Mark II aliases must follow TEMPO2's zero-offset redirects onto Lovell chains."""
+    assert get_observatory("jbmk2roach").clock_fmt == "tempo2"
+    assert _clock_file_names(get_observatory("jbmk2roach")) == _clock_file_names(
+        get_observatory("jbroach")
+    )
+    assert get_observatory("jbmk2dfb").clock_fmt == "tempo2"
+    assert _clock_file_names(get_observatory("jbmk2dfb")) == _clock_file_names(
+        get_observatory("jbdfb")
+    )
+    jbmk2 = get_observatory("jbmk2")
+    assert jbmk2.clock_fmt == "tempo2"
+    assert _clock_file_names(jbmk2) == [] or _clock_file_names(jbmk2) == [""]
+
+
+def test_jbmk2roach_matches_jbroach_clock_corrections():
+    """TEMPO2's jbmk2roach->jbroach alias is zero, so corrections must match jbroach."""
+    t = Time(np.linspace(56000, 58000, num=25), scale="utc", format="pulsar_mjd")
+    jbmk2 = get_observatory("jbmk2roach").clock_corrections(t, limits="error")
+    jbroach = get_observatory("jbroach").clock_corrections(t, limits="error")
+    assert np.allclose(jbmk2.to(u.us), jbroach.to(u.us), atol=1e-6 * u.us)
+
+
+def test_jbmk2dfb_matches_jbdfb_clock_corrections():
+    t = Time(np.linspace(56000, 58000, num=25), scale="utc", format="pulsar_mjd")
+    a = get_observatory("jbmk2dfb").clock_corrections(t, limits="error")
+    b = get_observatory("jbdfb").clock_corrections(t, limits="error")
+    assert np.allclose(a.to(u.us), b.to(u.us), atol=1e-6 * u.us)
 
 
 def test_names_and_aliases():

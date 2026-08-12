@@ -12,4 +12,5 @@ the released changes.
 ### Added
 ### Fixed
 - FDJUMPDM sign convention: a positive FDJUMPDM now adds a positive DM (and delay) on selected TOAs, matching Tempo2.
+- Jodrell Bank Mark II sites (``jbmk2`` / ``jbmk2roach`` / ``jbmk2dfb``) now follow TEMPO2's clock routing (equivalent to ``jbafb`` / ``jbroach`` / ``jbdfb``) instead of the default empty TEMPO clock path.
 ### Removed
