@@ -67,18 +67,22 @@ is that ``numpy`` provides floating-point types, for example,
    >>> (10*u.year*np.finfo(np.longdouble).eps).to(u.ns)
    <Quantity 0.03421482 ns>
 
-These numbers are represented with 80 bits, and most desktop and server
-machines have hardware for computing with these numbers, so they are not
-much slower than ordinary ("double-precision", 64-bit) floating-point
-numbers. Let me warn you about one point of possible confusion: modern
-computers have very complicated cache setups that prefer data to be
-aligned just so in memory, so ``numpy`` generally pads these numbers out
-with zeroes and stores them in larger memory spaces. Thus you will often
-see ``np.float96`` and ``np.float128`` types; these contain only
-numbers with 80-bit precision. Actual 128-bit precision is not currently
-available in ``numpy``, in part because on almost all current machines all
-calculations must be carried out in software, which takes 20-50 times as
-long.
+On typical x86_64 machines these values use 80-bit extended precision, with
+hardware support so they are not much slower than ordinary
+("double-precision", 64-bit) floating-point numbers. Modern CPUs have
+complicated cache alignment preferences, so ``numpy`` often pads these
+numbers in memory; you will therefore often see ``np.float96`` or
+``np.float128`` *dtypes* that still hold only 80-bit precision.
+
+True IEEE binary128 (about 33 decimal digits) *is* available as
+``numpy.longdouble`` on some platforms — notably Linux on aarch64 (including
+Apple Silicon hosts running a native ``linux/arm64`` container). Those
+operations are usually implemented in software and can be slower per
+operation than 80-bit hardware ``longdouble``, but they provide more
+precision. By contrast, native macOS ARM Python builds typically make
+``numpy.longdouble`` an alias of ``float64``, which is not enough for PINT;
+use a Linux arm64 container or an x86_64 (Rosetta) environment instead (see
+:ref:`Installation`).
 
 An alternative approach to dealing with more precision than your machine's
 floating-point numbers natively support is to represent numbers as a pair
