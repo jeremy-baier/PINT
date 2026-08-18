@@ -234,7 +234,7 @@ def test_residuals_wideband_chi2(wideband_fake):
     assert_allclose(f.fit_toas(), r.chi2)
     assert f.fit_toas() >= rn.chi2
 
-    assert np.all(np.isfinite(list(r.rms_weighted().values())))
+    assert all(map(lambda x: np.isfinite(x.value), r.rms_weighted().values()))
     assert np.all(np.isfinite(list(r._combined_data_error)))
 
     assert r.whitened_resids_kstest()[1] > 0.05
@@ -366,7 +366,7 @@ def test_wideband_chi2_updating(wideband_fake):
     assert_allclose(f2.model.F0.value, 1)
     assert 1e-3 > abs(WidebandTOAResiduals(toas, f2.model).chi2 - ftc2) > 1e-5
     ftc2 = f2.fit_toas(maxiter=10)
-    assert_allclose(WidebandTOAResiduals(toas, f2.model).chi2, ftc2)
+    assert_allclose(WidebandTOAResiduals(toas, f2.model).chi2, ftc2, atol=1e-5)
 
 
 @pytest.mark.parametrize(

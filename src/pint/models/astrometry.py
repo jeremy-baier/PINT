@@ -16,7 +16,6 @@ from erfa import ErfaWarning, pmsafe
 from loguru import logger as log
 
 import pint.toa
-from pint import ls
 from pint.exceptions import MissingParameter
 from pint.models.parameter import (
     AngleParameter,
@@ -277,7 +276,7 @@ class Astrometry(DelayComponent):
         if np.any(c):
             L_hat = self.ssb_to_psb_xyz_ICRS(epoch=tbl["tdbld"][c].astype(np.float64))
             re_dot_L = np.sum(tbl["ssb_obs_pos"][c] * L_hat, axis=1)
-            delay[c] = -re_dot_L.to(ls).value
+            delay[c] = -re_dot_L.to(u.lsec).value
             if self.PX.value != 0.0:
                 # This is equivalent to PX * c / AU.
                 L = (1.0 / self.PX.value) * u.kpc
@@ -288,7 +287,7 @@ class Astrometry(DelayComponent):
                     * tbl["ssb_obs_pos"].unit ** 2
                 )
                 delay[c] += (
-                    (0.5 * (re_sqr / L) * (1.0 - re_dot_L**2 / re_sqr)).to(ls).value
+                    (0.5 * (re_sqr / L) * (1.0 - re_dot_L**2 / re_sqr)).to(u.lsec).value
                 )
         return delay * u.second
 
@@ -710,7 +709,7 @@ class AstrometryEquatorial(Astrometry):
         # Reference: Madison+ 2023, The Astrophysical Journal 777 104 (Equations 9, 10)
         Omega = self.vlbi_coord_rotation()
         Khat = self.xyz_from_radec(ra, dec)
-        result = Omega @ Khat if Omega is not None else Khat
+        result = (Omega @ Khat.T).T if Omega is not None else Khat
         if self.use_ssb_cache:
             self._ssb_cache_icrs = result.copy()
             self._ssb_cache_key_icrs = key

@@ -16,7 +16,7 @@ import astropy.units as u
 import numpy as np
 from loguru import logger as log
 from scipy.linalg import cho_factor, cho_solve, LinAlgError
-from scipy.stats import kstest
+from scipy.stats import kstest, norm
 
 from pint import dmu
 from pint.models.dispersion_model import Dispersion
@@ -442,7 +442,7 @@ class Residuals:
             w = 1.0 / (self.get_data_error().value ** 2)
             mean, err = weighted_mean(full, w)
 
-        return full - mean
+        return (full - mean).astype(float)
 
     def _calc_mean(
         self,
@@ -566,7 +566,9 @@ class Residuals:
                 use_weighted_mean=use_weighted_mean,
                 use_abs_phase=use_abs_phase,
             )
-        return (phase_resids / self.get_PSR_freq(calctype=calctype)).to(u.s)
+        return (
+            (phase_resids / self.get_PSR_freq(calctype=calctype)).to(u.s).astype(float)
+        )
 
     def calc_whitened_resids(self) -> u.Quantity:
         """Compute whitened timing residuals (dimensionless).
@@ -616,7 +618,7 @@ class Residuals:
         :meth:`~pint.residuals.Residuals.whitened_resids_adtest`
         """
         rw = self.calc_whitened_resids().astype(float)
-        ks = kstest(rw, "norm", args=(0, 1))
+        ks = kstest(rw, norm(loc=0, scale=1).cdf)
         return ks.statistic, ks.pvalue
 
     def whitened_resids_adtest(self) -> Tuple[float, float]:
@@ -1088,7 +1090,7 @@ class WidebandDMResiduals(Residuals):
                 resids -= wm
             else:
                 resids -= resids.mean()
-        return resids
+        return resids.astype(float)
 
     def calc_chi2(self) -> float:
         data_errors = self.get_data_error()
@@ -1413,7 +1415,7 @@ class WidebandTOAResiduals(CombinedResiduals):
         :meth:`~pint.residuals.WidebandTOAResiduals.whitened_resids_adtest`
         """
         rw = self.calc_wideband_whitened_resids().astype(float)
-        ks = kstest(rw, "norm", args=(0, 1))
+        ks = kstest(rw, norm(loc=0, scale=1).cdf)
         return ks.statistic, ks.pvalue
 
     def whitened_resids_adtest(self) -> Tuple[float, float]:
