@@ -13,6 +13,7 @@ the released changes.
 - MJD string formatting uses enough fractional digits for the platform's `numpy.longdouble` precision (needed for IEEE binary128 on Linux aarch64)
 ### Added
 ### Fixed
+- FDJUMPDM sign convention: a positive FDJUMPDM now adds a positive DM (and delay) on selected TOAs, matching Tempo2.
 - Precision tests / MJD string length on platforms with true `float128` `longdouble` (e.g. Linux aarch64): stop truncating via a fixed `U30` dtype and emit enough digits for `str(longdouble)`
 - Binary-convert roundtrip tests and START/FINISH MJD checks: stop requiring bit-identical `longdouble`/`Time` equality on binary128 (TASC↔T0 goes through float64; MJDParameter stores via jd1/jd2)
 - Jodrell Bank Mark II sites (``jbmk2`` / ``jbmk2roach`` / ``jbmk2dfb``) now follow TEMPO2's clock routing (equivalent to ``jbafb`` / ``jbroach`` / ``jbdfb``) instead of the default empty TEMPO clock path.
