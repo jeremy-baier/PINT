@@ -1368,6 +1368,11 @@ class SolarWindProxyRegression(SolarWindDispersion):
         smooth_days : int
             Boxcar filter width in days applied before normalization. Zero
             means no smoothing; 81 is standard for the F10.7 cm 81-day mean.
+            The width is converted from days to samples using the median
+            cadence of ``proxy_mjd``, so the same value means the same
+            physical window whether the series is sampled daily or monthly.
+            It becomes a no-op when the series is already coarser than the
+            requested window.
         normalize : bool
             If True (default), the proxy is normalized to zero mean and unit
             variance at interpolation time using statistics computed from
@@ -1379,10 +1384,37 @@ class SolarWindProxyRegression(SolarWindDispersion):
         proxy_mjd = np.asarray(proxy_mjd, dtype=float)
         proxy_vals = np.asarray(proxy_vals, dtype=float)
 
-        if smooth_days > 1:
-            proxy_vals = uniform_filter1d(
-                proxy_vals, size=int(smooth_days), mode="nearest"
+        if proxy_mjd.shape != proxy_vals.shape:
+            raise ValueError(
+                f"proxy_mjd and proxy_vals must have the same shape, got "
+                f"{proxy_mjd.shape} and {proxy_vals.shape}."
             )
+
+        # Sort by epoch: the median cadence below and the np.interp() in
+        # _get_proxy_at_toas() both require monotonically increasing MJDs.
+        order = np.argsort(proxy_mjd)
+        proxy_mjd, proxy_vals = proxy_mjd[order], proxy_vals[order]
+
+        # Boxcar smoothing.  uniform_filter1d's ``size`` is in *samples*, but
+        # smooth_days is specified in days, so convert using the median cadence
+        # of the series.  Without this a monthly F10.7 series smoothed with
+        # smooth_days=81 would be averaged over 81 months (~6.75 yr), erasing
+        # the solar cycle the proxy is meant to carry.  For a daily series the
+        # cadence is 1 d and the behaviour is unchanged.
+        if smooth_days > 0 and len(proxy_mjd) > 1:
+            cadence_days = float(np.median(np.diff(proxy_mjd)))
+            window = int(round(smooth_days / cadence_days)) if cadence_days > 0 else 0
+            if window > len(proxy_vals):
+                log.warning(
+                    f"smooth_days={smooth_days} spans {window} samples at the "
+                    f"proxy's {cadence_days:.3g} d cadence, but the series has "
+                    f"only {len(proxy_vals)} samples; the result will be nearly "
+                    f"constant."
+                )
+            if window > 1:
+                proxy_vals = uniform_filter1d(
+                    proxy_vals, size=window, mode="nearest"
+                )
 
         if normalize:
             raw_mean = float(np.mean(proxy_vals))
