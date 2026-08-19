@@ -84,7 +84,7 @@ def _add_time_domain_sw_component(model, kernel):
     model["TDSWKERNEL"].value = kernel
     model["TDSWDT"].value = 14.0
     model["TDSWINTERP_KIND"].value = "linear"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
 
     if kernel == "ridge":
         pass  # only TDSWLOGSIG is required
@@ -272,7 +272,7 @@ def test_time_domain_sw_invalid_kernel_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = "bogus_kernel"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     with pytest.raises(ValueError, match="TDSWKERNEL"):
         model.validate()
 
@@ -291,7 +291,7 @@ def test_time_domain_sw_missing_required_param(kernel, missing_param):
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = kernel
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     # deliberately do NOT set missing_param (or extra required params for qp)
     # For quasi_periodic we need TDSWLOGELL at minimum to fail – leave it None.
     with pytest.raises(ValueError, match=missing_param):
@@ -323,7 +323,7 @@ def test_time_domain_sw_node_based_interpolation(kernel):
     # _add_tdsw_node_component calls component.validate() once nset >= 2, so
     # missing required params would raise inside the loop otherwise.
     component.TDSWKERNEL.value = kernel
-    component.TDSWLOGSIG.value = -7.0
+    component.TDSWLOGSIG.value = 0.0
     component.TDSWINTERP_KIND.value = "linear"
     if kernel == "sqexp":
         component.TDSWLOGELL.value = 1.2
@@ -386,7 +386,7 @@ def test_time_domain_sw_invalid_interp_kind_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = "ridge"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     model["TDSWDT"].value = 30.0
     model["TDSWINTERP_KIND"].value = "not_a_kind"
     with pytest.raises(ValueError, match="TDSWINTERP_KIND"):
@@ -400,7 +400,7 @@ def test_time_domain_sw_invalid_matern_nu_rejected(bad_nu):
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = "matern"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     model["TDSWLOGELL"].value = 1.0
     model["TDSWDT"].value = 30.0
     model["TDSWNU"].value = bad_nu
@@ -419,7 +419,7 @@ def test_time_domain_sw_conflicting_dt_and_nodes_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     component.TDSWKERNEL.value = "ridge"
-    component.TDSWLOGSIG.value = -7.0
+    component.TDSWLOGSIG.value = 0.0
     component.TDSWDT.value = 14.0  # non-default: conflicts with nodes
     component.add_tdsw_node_component(55000.0, index=1)  # nset=1, no validate yet
     # Second node addition triggers internal validate() -> must raise.
@@ -433,7 +433,7 @@ def test_time_domain_sw_single_node_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = "ridge"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     component.add_tdsw_node_component(55000.0, index=1)
     with pytest.raises(ValueError, match="at least 2"):
         model.validate()
@@ -449,7 +449,7 @@ def test_time_domain_sw_duplicate_nodes_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     component.TDSWKERNEL.value = "ridge"
-    component.TDSWLOGSIG.value = -7.0
+    component.TDSWLOGSIG.value = 0.0
     component.add_tdsw_node_component(55000.0, index=1)  # nset=1, no validate yet
     # Second addition with same MJD triggers internal validate() -> must raise.
     with pytest.raises(ValueError, match="unique"):
@@ -462,7 +462,7 @@ def test_time_domain_sw_negative_dt_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = "ridge"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     model["TDSWDT"].value = -5.0
     with pytest.raises(ValueError, match="TDSWDT"):
         model.validate()
@@ -501,6 +501,8 @@ def test_time_domain_sw_parfile_serialises_params(kernel):
     if kernel == "quasi_periodic":
         assert "TDSWLOGGAMP" in par_str
         assert "TDSWLOGP" in par_str
+
+
 @pytest.mark.parametrize("gp", ["Red", "DM"])
 def test_log_frequencies(gp):
     GP = gp.upper()

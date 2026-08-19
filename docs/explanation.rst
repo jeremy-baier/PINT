@@ -753,6 +753,12 @@ This is what is implemented in PINT's fitters, both the generalized
 least-squares fitter for narrowband data, and the fitter used for all wideband
 data (whether it has correlated errors or not).
 
+Most of PINT's stochastic components describe :math:`\phi` with a Fourier basis
+and a diagonal set of weights, as above. PINT also provides a Gaussian process
+whose covariance is specified directly in the time domain, in which case
+:math:`\phi` is a dense matrix rather than a diagonal one; see
+:ref:`Time-domain solar wind noise`.
+
 It is perhaps worth noting that if :math:`B^{-1}` were zero or omitted, these
 would be the equations for a linear least squares fit for :math:`b` to match
 :math:`\delta t` with variances represented in :math:`N`. The addition of
@@ -1024,3 +1030,8 @@ by Tim Peters::
 .. _PEP8: https://www.python.org/dev/peps/pep-0008/
 .. _pytest: https://docs.pytest.org/en/latest/
 .. _pdb: https://docs.python.org/3/library/pdb.html
+
+.. toctree::
+   :maxdepth: 2
+
+   timedomain-solar-wind

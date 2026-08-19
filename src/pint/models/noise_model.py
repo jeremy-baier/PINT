@@ -1283,7 +1283,7 @@ class TimeDomainSWNoise(NoiseComponent):
     Kernel definitions
     ------------------
     Let :math:`\\tau = |t_i - t_j|` (in seconds at the interpolation nodes),
-    :math:`\\sigma = 10^{\\mathtt{TDSWLOGSIG}}`,
+    :math:`\\sigma = 10^{\\mathtt{TDSWLOGSIG}}` in :math:`\\mathrm{cm}^{-3}`,
     :math:`\\ell = 10^{\\mathtt{TDSWLOGELL}}` days,
     :math:`p = 10^{\\mathtt{TDSWLOGP}}` years.
 
@@ -1291,6 +1291,14 @@ class TimeDomainSWNoise(NoiseComponent):
         ``TDSWLOGELL`` is in **log10(days)** and ``TDSWLOGP`` is in **log10(years)**
         in both PINT and discovery, matching the enterprise convention for the
         quasi-periodic kernel.  The kernel functions internally convert to seconds.
+
+        ``TDSWLOGSIG``, however, does **not** follow the enterprise convention.
+        The basis returned by :meth:`get_noise_basis` already contains the solar
+        wind geometry factor and the :math:`\\nu^{-2}` dispersion law, so the GP
+        coefficients are an electron density referenced to 1 AU and
+        :math:`\\sigma` is in :math:`\\mathrm{cm}^{-3}`.  In enterprise the
+        equivalent process acts directly on the residuals and the amplitude is in
+        seconds.  Physically sensible values here are of order unity.
 
     **ridge** (white-noise / diagonal)
 
@@ -1342,8 +1350,8 @@ class TimeDomainSWNoise(NoiseComponent):
     .. math::
 
         K(\\tau) = \\sigma^2
-                   \\exp\\!\\left(-\\frac{\\tau^2}{2\\ell^2}\\right)
-                   \\exp\\!\\left(-\\frac{2\\sin^2\\!\\frac{\\pi\\tau}{P}}{\\Gamma_p^2}\\right)
+                   \\exp\\!\\left(-\\frac{\\tau^2}{2\\ell^2}
+                   - \\Gamma_p \\sin^2\\!\\frac{\\pi\\tau}{P}\\right)
 
     Requires ``TDSWLOGSIG``, ``TDSWLOGELL``, ``TDSWLOGGAMP``, ``TDSWLOGP``.
 
@@ -1384,7 +1392,7 @@ class TimeDomainSWNoise(NoiseComponent):
     >>> sw_comp = TimeDomainSWNoise()
     >>> model.add_component(sw_comp, validate=False)
     >>> model["TDSWKERNEL"].value = "matern"
-    >>> model["TDSWLOGSIG"].value = -8.0
+    >>> model["TDSWLOGSIG"].value = 0.0
     >>> model["TDSWLOGELL"].value = 1.5
     >>> model["TDSWNU"].value = 1.5
     >>> model["TDSWDT"].value = 14.0
@@ -1397,7 +1405,7 @@ class TimeDomainSWNoise(NoiseComponent):
 
         TDSWKERNEL        matern
         TDSWDT            14.0
-        TDSWLOGSIG        -8.0
+        TDSWLOGSIG        0.0
         TDSWLOGELL        1.5
         TDSWNU            1.5
         TDSWINTERP_KIND   linear
@@ -1411,7 +1419,7 @@ class TimeDomainSWNoise(NoiseComponent):
     >>> sw_comp = TimeDomainSWNoise()
     >>> model.add_component(sw_comp, validate=False)
     >>> model["TDSWKERNEL"].value = "ridge"
-    >>> model["TDSWLOGSIG"].value = -7.0
+    >>> model["TDSWLOGSIG"].value = 0.0
     >>> for i, mjd in enumerate(node_mjd_array, start=1):
     ...     sw_comp.add_tdsw_node_component(mjd, index=i)
     >>> model.validate()
@@ -1478,9 +1486,13 @@ class TimeDomainSWNoise(NoiseComponent):
         self.add_param(
             floatParameter(
                 name="TDSWLOGSIG",
-                units="s",
+                units="",
                 aliases=[],
-                description="Log10 amplitude of time-domain SW noise kernel.",
+                description=(
+                    "Log10 amplitude of time-domain SW noise kernel. The GP "
+                    "coefficients are a solar wind electron density referenced "
+                    "to 1 AU, so sigma is in cm^-3 (not seconds)."
+                ),
                 convert_tcb2tdb=False,
             )
         )
@@ -1695,7 +1707,7 @@ class TimeDomainSWNoise(NoiseComponent):
         * **matern**
           Matern kernel with smoothness :math:`\\nu \\in \\{0.5, 1.5, 2.5\\}`
         * **quasi_periodic**
-          :math:`K_{SE}(t_i,t_j) \\cdot \\exp\\!\\left(-\\frac{2\\sin^2\\!\\frac{\\pi(t_i-t_j)}{p}}{\\Gamma_p^2}\\right)`
+          :math:`K_{SE}(t_i,t_j) \\cdot \\exp\\!\\left(-\\Gamma_p \\sin^2\\!\\frac{\\pi(t_i-t_j)}{p}\\right)`
         """
         _, nodes = self._get_basis_and_nodes(toas)
         kernel = self.TDSWKERNEL.value
@@ -1995,7 +2007,9 @@ def periodic_kernel(
     nodes : np.ndarray
         1-D array of evaluation points in seconds (e.g. average TOA at each epoch).
     log10_sigma : float
-        Log10 of the amplitude in the same units as the residuals.
+        Log10 of the amplitude, in the units of the Gaussian process
+        coefficients (:math:`\\mathrm{cm}^{-3}` as used by
+        :class:`TimeDomainSWNoise`).
     log10_ell : float
         Log10 of the squared-exponential length scale in **days**.
     log10_gam_p : float
@@ -2147,7 +2161,7 @@ def ridge_kernel(
         used; the values themselves are ignored.
     log10_sigma : float
         Log10 of the amplitude; the diagonal entries are
-        :math:`\\sigma^2 = 10^{2\\,\\texttt{log10\_sigma}}`.
+        :math:`\\sigma^2 = 10^{2\\,\\texttt{log10\\_sigma}}`.
 
     Returns
     -------

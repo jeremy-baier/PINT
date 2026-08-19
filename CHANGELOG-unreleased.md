@@ -14,6 +14,7 @@ the released changes.
 - FDJUMPDM sign convention: a positive FDJUMPDM now adds a positive DM (and delay) on selected TOAs, matching Tempo2.
 ### Added
 - Time-domain solar wind GP noise components: ridge, squared-exponential, Matérn, and quasi-periodic kernels
+- Documentation page explaining the time-domain solar wind noise model, its interpolation basis, and how it differs from the Fourier-basis noise models
 ### Fixed
 - Precision tests / MJD string length on platforms with true `float128` `longdouble` (e.g. Linux aarch64): stop truncating via a fixed `U30` dtype and emit enough digits for `str(longdouble)`
 - Binary-convert roundtrip tests and START/FINISH MJD checks: stop requiring bit-identical `longdouble`/`Time` equality on binary128 (TASC↔T0 goes through float64; MJDParameter stores via jd1/jd2)
