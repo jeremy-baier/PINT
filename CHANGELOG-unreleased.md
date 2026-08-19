@@ -12,7 +12,11 @@ the released changes.
 - Document Apple Silicon via native ``linux/arm64`` containers (`nanograv/ng20`) instead of claiming PINT cannot run there; Rosetta/osx-64 remains an alternative
 - MJD string formatting uses enough fractional digits for the platform's `numpy.longdouble` precision (needed for IEEE binary128 on Linux aarch64)
 - FDJUMPDM sign convention: a positive FDJUMPDM now adds a positive DM (and delay) on selected TOAs, matching Tempo2.
+- Chromatic delays are now referenced to the new ``CM_FREF`` parameter (default 1400 MHz) instead of an implicit 1 MHz: the ``ChromaticCM``, ``ChromaticCMX`` and ``CMWaveX`` delay is ``CM * DMconst * (freq / CM_FREF)**(-TNCHROMIDX)``. CM (and CMX/CMWX amplitude) values in existing par files describe the same delay only after dividing by ``CM_FREF**TNCHROMIDX``.
+- ``PLChromNoise`` scales its Fourier basis by ``(CM_FREF/f)**TNCHROMIDX`` instead of a hard-coded 1400 MHz reference (unchanged for the default ``CM_FREF``).
+- ``PLDMNoise`` scales its Fourier basis by ``(DM_FREF/f)**2`` instead of a hard-coded 1400 MHz reference (unchanged for the default ``DM_FREF``).
 ### Added
+- ``CM_FREF``: reference frequency (MHz) of the chromatic measure, default 1400 MHz, frozen by default.
 ### Fixed
 - Precision tests / MJD string length on platforms with true `float128` `longdouble` (e.g. Linux aarch64): stop truncating via a fixed `U30` dtype and emit enough digits for `str(longdouble)`
 - Binary-convert roundtrip tests and START/FINISH MJD checks: stop requiring bit-identical `longdouble`/`Time` equality on binary128 (TASC↔T0 goes through float64; MJDParameter stores via jd1/jd2)
