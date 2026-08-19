@@ -229,6 +229,14 @@ class ChromaticCM(Chromatic):
                     "CMEPOCH",
                     "CMEPOCH or PEPOCH is required if CM1 or higher are set",
                 )
+        if (
+            not self.CM_FREF.value
+        ):
+            raise ValueError(
+                "Chromatic",
+                "CM_FREF",
+                "CM_FREF is set to 0"
+            )
 
     def CM_derivative_unit(self, n):
         return f"pc cm^-3 MHz^-2 / yr^{n:d}" if n else "pc cm^-3 MHz^-2"

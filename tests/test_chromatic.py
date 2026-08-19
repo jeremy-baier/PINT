@@ -16,6 +16,7 @@ def test_chromatic_cm():
     par = """
         F0 100 1
         CMEPOCH 55000
+        CM_FREF 1400 0
         CM 0.01
         CM1 0.001
         CM2 0.0001 
@@ -36,6 +37,7 @@ def test_chromatic_cm():
     with pytest.raises(MissingParameter):
         par = """
             F0 100 1
+            CM_FREF 1400 0
             CM 0.01
             CM1 0.001
             CM2 0.0001 
@@ -47,6 +49,7 @@ def test_change_cmepoch():
     par = """
         F0 100 1
         CMEPOCH 55000
+        CM_FREF 1400 0
         CM 0.01
         CM1 0.001
         CM2 0.0001 
@@ -75,7 +78,8 @@ def test_chromatic_cm_fit():
         DM      10 0
         CM      10 1
         CM1     0.001 1
-        TNCHROMIDX   4 
+        TNCHROMIDX   4
+        CM_FREF 800 0
         TZRSITE   gbt
         TZRMJD  55000
         TZRFRQ  500
@@ -137,7 +141,6 @@ def test_cm_fref_default():
     assert m.CM_FREF.frozen
     assert "CM_FREF" in str(m)
 
-    # and it round-trips through a par file
     m2 = get_model(StringIO(str(m)))
     assert m2.CM_FREF.quantity == m.CM_FREF.quantity
 
