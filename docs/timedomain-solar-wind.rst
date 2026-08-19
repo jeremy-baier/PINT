@@ -26,11 +26,11 @@ factor:
 
 .. math::
 
-    \mathrm{DM}_\odot(t) = n_E\; \times\; G(t)
+    \mathrm{DM}_\odot(t) = n_E(t)\; \times\; G(t)
 
 Here :math:`n_E` is the ``NE_SW`` parameter: the solar wind
 electron number density in :math:`\mathrm{cm}^{-3}`, **referenced to a distance
-of 1 AU from the Sun**.  This is sometimes written as `n_e(1\,\mathrm{AU})`. The density at any other radius is obtained from a
+of 1 AU from the Sun**.  This is sometimes written as :math:`n_e(1\,\mathrm{AU})`. The density at any other radius is obtained from a
 spherically symmetric power-law solar wind, which for the default ``SWM 0``
 (Edwards et al. 2006) is the usual :math:`1/r^2` model,
 
@@ -51,7 +51,7 @@ Gaussian process prior on
 
 .. math::
 
-    \delta n_E
+    \delta n_E(t)
 
 — the line-of-sight-averaged solar wind electron density, referenced to 1 AU
 under the same :math:`1/r^2` model — and lets the existing geometry factor and
@@ -59,7 +59,7 @@ the :math:`\nu^{-2}` dispersion law carry it through to a delay:
 
 .. math::
 
-    \delta t(t, \nu) \;=\; \underbrace{\delta n_E}_{\text{the GP}}
+    \delta t(t, \nu) \;=\; \underbrace{\delta n_E(t)}_{\text{the GP}}
                       \; \times \; \underbrace{G(t)}_{\text{geometry}}
                       \; \times \; \frac{K}{\nu^{2}}
 
@@ -169,7 +169,7 @@ The interpolation basis
 The basis is built by :func:`pint.models.noise_model.make_interpolation_basis`,
 which wraps :class:`scipy.interpolate.interp1d`.  Each column is the response of
 one node: the function that equals one at that node and zero at every other
-node, evaluated at the TOA epochs.  For the default ``linear`` interpolation
+node, evaluated at the TOA epochs.  For the default ``LINEAR`` interpolation
 these are triangular "hat" functions.
 
 .. plot::
@@ -201,8 +201,10 @@ these are triangular "hat" functions.
    ax1.set_ylim(-0.08, 1.45)
 
    # --- (b) the effect of TDSWINTERP_KIND on a single basis function ---
-   for kind in ("linear", "nearest", "cubic"):
-       Uk, nodes_k = make_interpolation_basis(t_sec, dt=45.0, kind=kind)
+   for kind in ("LINEAR", "NEAREST", "CUBIC"):
+       # make_interpolation_basis passes `kind` straight to scipy, which wants
+       # the lower-case spelling; the par file value is upper case.
+       Uk, nodes_k = make_interpolation_basis(t_sec, dt=45.0, kind=kind.lower())
        j = Uk.shape[1] // 2
        ax2.plot(t_mjd, Uk[:, j], lw=1.8, label=f"TDSWINTERP_KIND = '{kind}'")
    ax2.plot(nodes / 86400.0, np.zeros_like(nodes), "k|", ms=16)
@@ -249,12 +251,12 @@ rejects models that try to use both.
 
 ``TDSWINTERP_KIND``
     The interpolation kind passed to :class:`scipy.interpolate.interp1d`; one of
-    ``linear`` (default), ``nearest``, ``nearest-up``, ``zero``, ``slinear``,
-    ``quadratic``, ``cubic``, ``previous``, or ``next``.  Panel (b) above shows
-    the difference: ``nearest`` makes the process piecewise constant, and the
+    ``LINEAR`` (default), ``NEAREST``, ``NEAREST-UP``, ``ZERO``, ``SLINEAR``,
+    ``QUADRATIC``, ``CUBIC``, ``PREVIOUS``, or ``NEXT``.  Panel (b) above shows
+    the difference: ``NEAREST`` makes the process piecewise constant, and the
     higher-order kinds trade smoothness for basis functions that overshoot and
     ring, undoing the strict locality and positivity of the linear hats.
-    ``linear`` is the sensible default and the only one that is a partition of
+    ``LINEAR`` is the sensible default and the only one that is a partition of
     unity for arbitrary node spacing.
 
 
@@ -274,22 +276,22 @@ Kernels
    * - ``TDSWKERNEL``
      - Required parameters
      - :math:`K(\tau)`
-   * - ``ridge``
+   * - ``RIDGE``
      - ``TDSWLOGSIG``
      - :math:`\sigma^2 \delta_{ij}`
-   * - ``sqexp``
+   * - ``SQEXP``
      - ``TDSWLOGSIG``, ``TDSWLOGELL``
      - :math:`\sigma^2 \exp\left(-\tau^2 / 2\ell^2\right)`
-   * - ``matern``
+   * - ``MATERN``
      - ``TDSWLOGSIG``, ``TDSWLOGELL`` (+ ``TDSWNU``)
      - :math:`\sigma^2 \exp(-\tau/\ell)` for :math:`\nu=1/2`;
        :math:`\sigma^2 (1 + \sqrt{3}\tau/\ell)\exp(-\sqrt{3}\tau/\ell)` for :math:`\nu=3/2`;
        :math:`\sigma^2 (1 + \sqrt{5}\tau/\ell + 5\tau^2/3\ell^2)\exp(-\sqrt{5}\tau/\ell)` for :math:`\nu=5/2`
-   * - ``quasi_periodic``
+   * - ``QUASI_PERIODIC``
      - ``TDSWLOGSIG``, ``TDSWLOGELL``, ``TDSWLOGGAMP``, ``TDSWLOGP``
      - :math:`\sigma^2 \exp\left(-\tau^2/2\ell^2 - \Gamma_p \sin^2(\pi\tau/P)\right)`
 
-All kernels except ``ridge`` add a small diagonal regulariser
+All kernels except ``RIDGE`` add a small diagonal regulariser
 :math:`d = (\sigma/50000)^2` for numerical stability; the same trick, with a
 different constant, is used in ``enterprise_extensions``.  The lag :math:`\tau`
 is computed in seconds internally, and the length scale and period are converted
@@ -297,23 +299,23 @@ from days and years respectively.
 
 Choosing among them is a statement about how the density varies:
 
-``ridge``
+``RIDGE``
     Independent fluctuations at each node — a white process, with no correlation
     between nodes at all.  This is the default and the cheapest option, and it
     is the right choice when the node spacing is already the timescale of
     interest and you have no reason to impose smoothness.  It gives a diagonal
     :math:`\Phi`, so it is effectively a per-epoch ``NE_SW`` offset with a
     Gaussian prior.
-``sqexp``
+``SQEXP``
     Infinitely differentiable, very smooth realizations with a single
     correlation timescale :math:`\ell`.  Often *too* smooth for physical
     processes.
-``matern``
+``MATERN``
     The standard less-smooth alternative, with roughness controlled by
     :math:`\nu` (``TDSWNU``, one of 0.5, 1.5, or 2.5; default 1.5).  Smaller
     :math:`\nu` gives rougher realizations; :math:`\nu = 1/2` is the
-    Ornstein-Uhlenbeck process, and :math:`\nu \to \infty` recovers ``sqexp``.
-``quasi_periodic``
+    Ornstein-Uhlenbeck process, and :math:`\nu \to \infty` recovers ``SQEXP``.
+``QUASI_PERIODIC``
     A squared exponential multiplied by a periodic envelope: correlations recur
     with period :math:`P` but decay over :math:`\ell`.  This is the option that
     has no easy spectral analogue, and it is the natural way to express
@@ -335,7 +337,7 @@ density from each.
        matern_kernel,
        periodic_kernel,
        ridge_kernel,
-       se_kernel,
+       square_exponential_kernel,
    )
 
    rng = np.random.default_rng(42)
@@ -347,11 +349,11 @@ density from each.
 
    LOGSIG = 0.3  # sigma = 2 cm^-3, comparable to NE_SW itself
    kernels = [
-       ("ridge", lambda n: ridge_kernel(n, LOGSIG)),
-       ("sqexp, $\\ell$ = 50 d", lambda n: se_kernel(n, LOGSIG, np.log10(50.0))),
-       ("matern, $\\nu$ = 3/2, $\\ell$ = 50 d",
+       ("RIDGE", lambda n: ridge_kernel(n, LOGSIG)),
+       ("SQEXP, $\\ell$ = 50 d", lambda n: square_exponential_kernel(n, LOGSIG, np.log10(50.0))),
+       ("MATERN, $\\nu$ = 3/2, $\\ell$ = 50 d",
         lambda n: matern_kernel(n, LOGSIG, np.log10(50.0), 1.5)),
-       ("quasi-periodic, $P$ = 1 yr",
+       ("QUASI_PERIODIC, $P$ = 1 yr",
         lambda n: periodic_kernel(n, LOGSIG, np.log10(300.0), 0.0, 0.0)),
    ]
    colors = ["C0", "C1", "C2", "C3"]
@@ -367,7 +369,7 @@ density from each.
    for (name, kfunc), color in zip(kernels, colors):
        row = kfunc(np.concatenate(([0.0], lag)) * 86400.0)[0]
        corr = row[1:] / row[0]
-       if name == "ridge":
+       if name == "RIDGE":
            # A pure delta function: zero at every non-zero lag.
            ax.plot([0, 0], [0, 1], color=color, lw=1.8)
            ax.plot(0, 1, "o", color=color, ms=5)
@@ -387,23 +389,23 @@ density from each.
        a = rng.multivariate_normal(np.zeros(len(nodes)), K)
        axi.plot(t_mjd, U @ a, color=color, lw=1.0)
        axi.axhline(0.0, color="0.75", lw=0.6, zorder=0)
-       axi.set_ylabel(r"$\delta n_e$")
+       axi.set_ylabel(r"$\delta n_E$")
        axi.set_ylim(-8, 8)
        axi.text(0.012, 0.86, name, transform=axi.transAxes, fontsize=8,
                 va="top", bbox=dict(fc="white", ec="0.8", alpha=0.85, pad=2))
        if axi is not axes[-1]:
            axi.set_xticklabels([])
    axes[1].set_title(
-       r"(b) GP realizations of $\delta n_e(1\,\mathrm{AU})$ in cm$^{-3}$"
+       r"(b) GP realizations of $\delta n_E(t)$ in cm$^{-3}$"
        r" ($\sigma = 2$ cm$^{-3}$, nodes every 15 d)"
    )
    axes[-1].set_xlabel("MJD")
 
    fig.subplots_adjust(top=0.95, bottom=0.06, left=0.11, right=0.98)
 
-Note how different the four look at fixed :math:`\sigma`.  The ``ridge``
-realization is jagged because neighbouring nodes are independent and only the
-interpolation ties them together; ``sqexp`` is conspicuously smooth; ``matern``
+Note how different the four look at fixed :math:`\sigma`.  The ``RIDGE``
+realization is jagged because neighboring nodes are independent and only the
+interpolation ties them together; ``SQEXP`` is conspicuously smooth; ``MATERN``
 with :math:`\nu = 3/2` wanders with visible short-timescale roughness; and the
 quasi-periodic realization repeats on its period while slowly changing shape.
 
@@ -419,7 +421,7 @@ time.  The delay is the product of that cusp with the smooth GP, which means the
 solar wind GP is informed almost entirely by TOAs taken near conjunction — and,
 through the :math:`\nu^{-2}` law, by the lowest-frequency TOAs in the data set.
 
-The figure below follows one realization through the whole chain over five
+The figure below follows one realization through different views over five
 years, sampled densely enough to resolve the annual structure.
 
 .. plot::
@@ -431,7 +433,7 @@ years, sampled densely enough to resolve the annual structure.
 
    from pint.config import examplefile
    from pint.models import get_model
-   from pint.models.noise_model import TimeDomainSWNoise, se_kernel
+   from pint.models.noise_model import TimeDomainSWNoise, square_exponential_kernel
    from pint.simulation import make_fake_toas_uniform
 
    LOGSIG = 0.0                  # sigma = 1 cm^-3
@@ -449,7 +451,7 @@ years, sampled densely enough to resolve the annual structure.
 
    component = TimeDomainSWNoise()
    model.add_component(component, validate=False)
-   model["TDSWKERNEL"].value = "sqexp"
+   model["TDSWKERNEL"].value = "SQEXP"
    model["TDSWDT"].value = 15.0
    model["TDSWLOGSIG"].value = LOGSIG
    model["TDSWLOGELL"].value = LOGELL
@@ -459,7 +461,7 @@ years, sampled densely enough to resolve the annual structure.
    freq = model.barycentric_radio_freq(toas).to_value(u.MHz)
    elong = model.sun_angle(toas).to_value(u.deg)
 
-   # DM_sw = n_E * G(t), so the geometry factor carries all of the line-of-sight
+   # DM_sw = n_E(t) * G(t), so the geometry factor carries all of the line-of-sight
    # and 1/r^2 information.
    geometry = model.solar_wind_geometry(toas).to_value(u.pc)
 
@@ -469,7 +471,7 @@ years, sampled densely enough to resolve the annual structure.
    U, nodes = component._get_basis_and_nodes(toas)
    B = component.get_noise_basis(toas)
    rng = np.random.default_rng(4)
-   a = rng.multivariate_normal(np.zeros(len(nodes)), se_kernel(nodes, LOGSIG, LOGELL))
+   a = rng.multivariate_normal(np.zeros(len(nodes)), square_exponential_kernel(nodes, LOGSIG, LOGELL))
    delay_us = (B @ a) * 1e6
 
    lo = freq < 800  # the 430 MHz half of the simulated TOAs
@@ -481,7 +483,7 @@ years, sampled densely enough to resolve the annual structure.
    ax_eq.axis("off")
    ax_eq.text(
        0.5, 0.55,
-       r"$\delta t \;=\; \delta n_E \;\times\; G(t) \;\times\; K/\nu^2$"
+       r"$\delta t \;=\; \delta n_E(t) \;\times\; G(t) \;\times\; K/\nu^2$"
        "\n\n(b)" r"$\;\times\;$" "(c)" r"$\;\rightarrow\;$" "(d)",
        transform=ax_eq.transAxes, ha="center", va="center", fontsize=10,
        bbox=dict(fc="0.96", ec="0.8", pad=6),
@@ -500,7 +502,7 @@ years, sampled densely enough to resolve the annual structure.
    # (b) the GP: a smooth, slowly varying density
    ax_ne.plot(mjd[lo], (U @ a)[lo], color="C0", lw=1.4)
    ax_ne.axhline(0.0, color="0.75", lw=0.6, zorder=0)
-   ax_ne.set_ylabel(r"$\delta n_E$ (cm$^{-3}$)")
+   ax_ne.set_ylabel(r"$\delta n_E(t)$ (cm$^{-3}$)")
    ax_ne.set_title(
        r"(b) The GP: a smooth density ($\sigma = 1$ cm$^{-3}$, $\ell$ = 200 d)",
        fontsize=10,
@@ -528,13 +530,13 @@ years, sampled densely enough to resolve the annual structure.
 Panel (a) is for B1855+09, whose ecliptic latitude keeps it from ever coming
 closer than about 32 degrees to the Sun; a pulsar nearer the ecliptic reaches
 much larger geometry factors and is correspondingly better at constraining the
-wind.  Panels (b) through (d) are the point of the figure.  The Gaussian process
+wind.  Panels (b) through (d) are the point of the figure.  Notably, the Gaussian process
 itself is smooth and has no annual structure whatsoever — the periodicity in the
 delay is entirely geometric, imposed by :math:`G(t)`.  What the GP controls is
-the *amplitude and sign* of each cusp: where :math:`\delta n_E` happens to be
+the *amplitude and sign* of each cusp: where :math:`\delta n_E(t)` happens to be
 positive the conjunction produces a positive spike, and where it is negative the
 spike flips over.  Two conjunctions a year apart can therefore look completely
-different, which is exactly the behaviour a stationary power-law process in the
+different, which is exactly the behavior a stationary power-law process in the
 Fourier basis struggles to reproduce.
 
 Note also the frequency dependence: at :math:`\sigma = 1\ \mathrm{cm}^{-3}` the
@@ -557,9 +559,9 @@ the parent model, since that is where the geometry factor comes from.
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
 
-    model["TDSWKERNEL"].value = "matern"
+    model["TDSWKERNEL"].value = "MATERN"
     model["TDSWDT"].value = 14.0
-    model["TDSWINTERP_KIND"].value = "linear"
+    model["TDSWINTERP_KIND"].value = "LINEAR"
     model["TDSWLOGSIG"].value = 0.0    # sigma = 1 cm^-3
     model["TDSWLOGELL"].value = 1.5    # ell = 10^1.5 ~ 32 days
     model["TDSWNU"].value = 1.5
@@ -567,12 +569,12 @@ the parent model, since that is where the geometry factor comes from.
 
 which appears in the par file as::
 
-    TDSWKERNEL        matern
+    TDSWKERNEL        MATERN
     TDSWDT            14.0
     TDSWLOGSIG        0.0
     TDSWLOGELL        1.5
     TDSWNU            1.5
-    TDSWINTERP_KIND   linear
+    TDSWINTERP_KIND   LINEAR
 
 To use explicit nodes instead of a uniform grid, set every kernel parameter
 first and then add the nodes:
@@ -582,7 +584,7 @@ first and then add the nodes:
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
 
-    model["TDSWKERNEL"].value = "ridge"
+    model["TDSWKERNEL"].value = "RIDGE"
     model["TDSWLOGSIG"].value = 0.0
 
     for i, mjd in enumerate(node_mjds, start=1):

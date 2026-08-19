@@ -7,7 +7,7 @@ from pint.models.noise_model import (
     periodic_kernel,
     powerlaw,
     ridge_kernel,
-    se_kernel,
+    square_exponential_kernel,
 )
 
 
@@ -34,6 +34,6 @@ def test_time_domain_kernel_weights_from_longdouble_nodes_are_float64():
     nodes = np.array([1.0, 2.0, 4.0], dtype=np.longdouble)
 
     assert ridge_kernel(nodes).dtype == np.float64
-    assert se_kernel(nodes).dtype == np.float64
+    assert square_exponential_kernel(nodes).dtype == np.float64
     assert matern_kernel(nodes).dtype == np.float64
     assert periodic_kernel(nodes).dtype == np.float64
