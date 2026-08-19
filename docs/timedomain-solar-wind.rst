@@ -83,8 +83,8 @@ to a shift in ``NE_SW``.  The time-domain GP is best thought of as putting a
 prior on the departures of the 1 AU density from its mean value or mean function.
 
 
-Time domain versus spectral models
-----------------------------------
+Time domain vs. Fourier basis models
+------------------------------------
 
 PINT's existing stochastic components — :class:`~pint.models.noise_model.PLRedNoise`,
 :class:`~pint.models.noise_model.PLDMNoise`, :class:`~pint.models.noise_model.PLChromNoise`,
