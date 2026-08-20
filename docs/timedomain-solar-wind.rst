@@ -547,10 +547,13 @@ almost flat, a contrast of roughly :math:`(1400/430)^2 \approx 11`.
 Using the component
 -------------------
 
-``TimeDomainSWNoise`` has ``register = False``, so it is *not* selected
-automatically from a par file; it must be attached explicitly.  It also requires
-a :class:`~pint.models.solar_wind_dispersion.SolarWindDispersion` component in
-the parent model, since that is where the geometry factor comes from.
+``TimeDomainSWNoise`` is selected automatically when a par file contains any of
+its ``TDSW*`` parameters, and it round-trips through
+:func:`~pint.models.model_builder.get_model`.  It can also be attached to an
+existing model explicitly, which is convenient when building a model in Python.
+Either way it requires a
+:class:`~pint.models.solar_wind_dispersion.SolarWindDispersion` component in the
+parent model, since that is where the geometry factor comes from.
 
 .. code-block:: python
 

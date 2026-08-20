@@ -1328,7 +1328,8 @@ class TimeDomainSWNoise(NoiseComponent):
     * The interpolation basis is built from either a uniform grid with spacing
       ``TDSWDT`` (days) or an explicit set of ``TDSWNODE_NNNN`` parameters
       (MJD).  The two modes are mutually exclusive.
-    * ``register = False`` — attach this component explicitly via
+    * The component is selected automatically when a par file contains any of its
+      ``TDSW*`` parameters. It can also be attached to an existing model with
       :meth:`~pint.models.timing_model.TimingModel.add_component`.
 
     Examples
@@ -1391,7 +1392,7 @@ class TimeDomainSWNoise(NoiseComponent):
     .. [2] https://iopscience.iop.org/article/10.3847/1538-4357/ae4ee0
     """
 
-    register = False
+    register = True
     category = "SW_noise"
 
     introduces_correlated_errors = True

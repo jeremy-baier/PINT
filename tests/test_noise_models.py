@@ -114,6 +114,9 @@ def model_and_toas():
     add_DM_noise_to_model(model)
     add_chrom_noise_to_model(model)
     add_SW_noise_to_model(model)
+    # TimeDomainSWNoise is a registered correlated-noise component, so the
+    # generic parametrized tests below expect to find it in this model.
+    _add_time_domain_sw_component(model, "MATERN")
     return model, toas
 
 
@@ -150,7 +153,15 @@ def test_noise_weights_sign(model_and_toas, component_label):
 
     basis, weights = basis_weight_func(toas)
 
-    assert np.all(weights >= 0)
+    if np.ndim(weights) == 1:
+        assert np.all(weights >= 0)
+    else:
+        # a full basis covariance: off-diagonal entries may legitimately be
+        # negative (e.g. the quasi-periodic kernel), but it must be symmetric
+        # positive semi-definite with a non-negative diagonal
+        assert np.all(np.diag(weights) >= 0)
+        assert np.allclose(weights, weights.T)
+        assert np.all(np.linalg.eigvalsh(weights) > -1e-12 * np.max(weights))
 
 
 @pytest.mark.parametrize("component_label", correlated_noise_component_labels)
@@ -164,7 +175,10 @@ def test_covariance_matrix_relation(model_and_toas, component_label):
 
     basis, weights = basis_weights_func(toas)
     cov = cov_func(toas)
-    cov2 = np.dot(basis * weights[None, :], basis.T)
+    # `weights` is a 1-D vector of variances for the Fourier-basis components and
+    # a full 2-D covariance for the time-domain ones, so go through the helper
+    # rather than assuming the diagonal form.
+    cov2 = project_basis_covariance(basis, weights)
 
     assert np.allclose(cov, cov2)
 
@@ -503,16 +517,12 @@ def test_time_domain_sw_value_case_is_normalised(kernel_in, kind_in):
 
 
 @pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
-def test_time_domain_sw_parfile_serialises_params(kernel):
-    """All TimeDomainSWNoise parameters appear in the serialised par string.
+def test_time_domain_sw_parfile_roundtrips(kernel):
+    """TimeDomainSWNoise parameters are written to, and read back from, a par file.
 
-    ``TimeDomainSWNoise`` has ``register = False`` so ``get_model()`` will not
-    reconstruct it from a par file.  This test therefore validates that the
-    parameters are *written* correctly rather than testing a full read-back
-    roundtrip.
+    The component is registered, so ``get_model()`` reconstructs it from the
+    ``TDSW*`` parameters rather than requiring an explicit ``add_component``.
     """
-    import re
-
     model, _ = _base_model_and_toas()
     _add_time_domain_sw_component(model, kernel)
 
@@ -530,6 +540,27 @@ def test_time_domain_sw_parfile_serialises_params(kernel):
     if kernel == "QUASI_PERIODIC":
         assert "TDSWLOGGAMP" in par_str
         assert "TDSWLOGP" in par_str
+
+    # read it back: the component must be rebuilt with the same parameter values
+    model2 = get_model(StringIO(par_str))
+    assert "TimeDomainSWNoise" in model2.components
+    assert model2["TDSWKERNEL"].value == kernel
+    assert model2["TDSWINTERP_KIND"].value == model["TDSWINTERP_KIND"].value
+    for par in (
+        "TDSWDT",
+        "TDSWLOGSIG",
+        "TDSWLOGELL",
+        "TDSWNU",
+        "TDSWLOGGAMP",
+        "TDSWLOGP",
+    ):
+        assert model2[par].value == model[par].value, par
+
+
+def test_time_domain_sw_not_selected_without_tdsw_params():
+    """A par file with no TDSW* parameters must not pull in the component."""
+    model, _ = _base_model_and_toas()
+    assert "TimeDomainSWNoise" not in model.components
 
 
 @pytest.mark.parametrize("gp", ["Red", "DM"])
