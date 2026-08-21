@@ -8,8 +8,7 @@ can model the stochastic part of that delay in two different ways: as a
 Fourier-basis Gaussian process, :class:`~pint.models.noise_model.PLSWNoise`,
 or in the *time-domain* with a Gaussian process, :class:`~pint.models.noise_model.TimeDomainSWNoise`.
 This page explains what the time-domain model infers, how it differs from the
-Fourier-basis models that PINT uses and how its interpolation
-basis and kernels are controlled.
+Fourier-basis models that PINT uses and different choices for the interpolation basis and kernel.
 
 For the general theory of correlated errors and the reduced-rank machinery that
 both families share, see :ref:`Explanation` under "Timing noise and correlated
