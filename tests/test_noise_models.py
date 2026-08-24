@@ -1,6 +1,8 @@
 """Test if the split basis and weights functions for EcorrNoise and PLRedNoise
 and PLDMNoise give the same result as the old code."""
 
+import re
+
 import numpy as np
 import pytest
 from pint.config import examplefile
@@ -83,17 +85,17 @@ def _add_time_domain_sw_component(model, kernel):
 
     model["TDSWKERNEL"].value = kernel
     model["TDSWDT"].value = 14.0
-    model["TDSWINTERP_KIND"].value = "linear"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWINTERP_KIND"].value = "LINEAR"
+    model["TDSWLOGSIG"].value = 0.0
 
-    if kernel == "ridge":
+    if kernel == "RIDGE":
         pass  # only TDSWLOGSIG is required
-    elif kernel == "sqexp":
+    elif kernel == "SQEXP":
         model["TDSWLOGELL"].value = 1.2
-    elif kernel == "matern":
+    elif kernel == "MATERN":
         model["TDSWLOGELL"].value = 1.0
         model["TDSWNU"].value = 1.5
-    elif kernel == "quasi_periodic":
+    elif kernel == "QUASI_PERIODIC":
         model["TDSWLOGELL"].value = 1.1
         model["TDSWLOGGAMP"].value = -0.2
         model["TDSWLOGP"].value = 1.5
@@ -112,6 +114,9 @@ def model_and_toas():
     add_DM_noise_to_model(model)
     add_chrom_noise_to_model(model)
     add_SW_noise_to_model(model)
+    # TimeDomainSWNoise is a registered correlated-noise component, so the
+    # generic parametrized tests below expect to find it in this model.
+    _add_time_domain_sw_component(model, "MATERN")
     return model, toas
 
 
@@ -148,7 +153,15 @@ def test_noise_weights_sign(model_and_toas, component_label):
 
     basis, weights = basis_weight_func(toas)
 
-    assert np.all(weights >= 0)
+    if np.ndim(weights) == 1:
+        assert np.all(weights >= 0)
+    else:
+        # a full basis covariance: off-diagonal entries may legitimately be
+        # negative (e.g. the quasi-periodic kernel), but it must be symmetric
+        # positive semi-definite with a non-negative diagonal
+        assert np.all(np.diag(weights) >= 0)
+        assert np.allclose(weights, weights.T)
+        assert np.all(np.linalg.eigvalsh(weights) > -1e-12 * np.max(weights))
 
 
 @pytest.mark.parametrize("component_label", correlated_noise_component_labels)
@@ -162,7 +175,10 @@ def test_covariance_matrix_relation(model_and_toas, component_label):
 
     basis, weights = basis_weights_func(toas)
     cov = cov_func(toas)
-    cov2 = np.dot(basis * weights[None, :], basis.T)
+    # `weights` is a 1-D vector of variances for the Fourier-basis components and
+    # a full 2-D covariance for the time-domain ones, so go through the helper
+    # rather than assuming the diagonal form.
+    cov2 = project_basis_covariance(basis, weights)
 
     assert np.allclose(cov, cov2)
 
@@ -194,7 +210,7 @@ def test_noise_basis_weights_funcs(model_and_toas, component_label):
     assert np.allclose(basis_, basis) and np.allclose(weights, weights_)
 
 
-@pytest.mark.parametrize("kernel", ["ridge", "sqexp", "matern", "quasi_periodic"])
+@pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
 def test_noise_weights_sign_time_domain_sw_integration(kernel):
     """Integration test: each time-domain SW kernel should produce non-negative weights.
 
@@ -211,7 +227,7 @@ def test_noise_weights_sign_time_domain_sw_integration(kernel):
     assert np.all(weights >= 0)
 
 
-@pytest.mark.parametrize("kernel", ["ridge", "sqexp", "matern", "quasi_periodic"])
+@pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
 def test_time_domain_sw_covariance_matches_basis_weights(kernel):
     """Integration test: covariance must equal basis*weights*basis^T for each kernel.
 
@@ -261,7 +277,6 @@ def test_white_noise_model_derivs():
     )
 
 
-<<<<<<< HEAD
 # ---------------------------------------------------------------------------
 # TimeDomainSWNoise – kernel parameter validation tests
 # ---------------------------------------------------------------------------
@@ -273,7 +288,7 @@ def test_time_domain_sw_invalid_kernel_rejected():
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = "bogus_kernel"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     with pytest.raises(ValueError, match="TDSWKERNEL"):
         model.validate()
 
@@ -281,9 +296,9 @@ def test_time_domain_sw_invalid_kernel_rejected():
 @pytest.mark.parametrize(
     "kernel, missing_param",
     [
-        ("sqexp", "TDSWLOGELL"),
-        ("matern", "TDSWLOGELL"),
-        ("quasi_periodic", "TDSWLOGELL"),
+        ("SQEXP", "TDSWLOGELL"),
+        ("MATERN", "TDSWLOGELL"),
+        ("QUASI_PERIODIC", "TDSWLOGELL"),
     ],
 )
 def test_time_domain_sw_missing_required_param(kernel, missing_param):
@@ -292,7 +307,7 @@ def test_time_domain_sw_missing_required_param(kernel, missing_param):
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
     model["TDSWKERNEL"].value = kernel
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWLOGSIG"].value = 0.0
     # deliberately do NOT set missing_param (or extra required params for qp)
     # For quasi_periodic we need TDSWLOGELL at minimum to fail – leave it None.
     with pytest.raises(ValueError, match=missing_param):
@@ -304,12 +319,12 @@ def test_time_domain_sw_missing_required_param(kernel, missing_param):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kernel", ["ridge", "sqexp", "matern", "quasi_periodic"])
+@pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
 def test_time_domain_sw_node_based_interpolation(kernel):
     """Node-based TDSWNODE_ interpolation: basis/weights/cov consistent for all kernels.
 
     Kernel-specific parameters must be set *before* adding nodes because
-    ``_add_tdsw_node_component`` calls ``component.validate()`` internally as
+    ``add_tdsw_node_component`` calls ``component.validate()`` internally as
     soon as two or more nodes are present.
     """
     model, toas = _base_model_and_toas()
@@ -321,17 +336,17 @@ def test_time_domain_sw_node_based_interpolation(kernel):
     nodes = np.arange(t_mjd.min() - step, t_mjd.max() + step, step)
 
     # Set ALL kernel parameters before adding any nodes.
-    # _add_tdsw_node_component calls component.validate() once nset >= 2, so
+    # add_tdsw_node_component calls component.validate() once nset >= 2, so
     # missing required params would raise inside the loop otherwise.
     component.TDSWKERNEL.value = kernel
-    component.TDSWLOGSIG.value = -7.0
-    component.TDSWINTERP_KIND.value = "linear"
-    if kernel == "sqexp":
+    component.TDSWLOGSIG.value = 0.0
+    component.TDSWINTERP_KIND.value = "LINEAR"
+    if kernel == "SQEXP":
         component.TDSWLOGELL.value = 1.2
-    elif kernel == "matern":
+    elif kernel == "MATERN":
         component.TDSWLOGELL.value = 1.0
         component.TDSWNU.value = 1.5
-    elif kernel == "quasi_periodic":
+    elif kernel == "QUASI_PERIODIC":
         component.TDSWLOGELL.value = 1.1
         component.TDSWLOGGAMP.value = -0.2
         component.TDSWLOGP.value = 1.5
@@ -353,7 +368,7 @@ def test_time_domain_sw_node_based_interpolation(kernel):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kernel", ["ridge", "sqexp", "matern", "quasi_periodic"])
+@pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
 def test_time_domain_sw_gls_fitter_runs(kernel):
     """GLSFitter must instantiate and produce a finite chi-squared for each kernel.
 
@@ -386,8 +401,8 @@ def test_time_domain_sw_invalid_interp_kind_rejected():
     model, _ = _base_model_and_toas()
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
-    model["TDSWKERNEL"].value = "ridge"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWKERNEL"].value = "RIDGE"
+    model["TDSWLOGSIG"].value = 0.0
     model["TDSWDT"].value = 30.0
     model["TDSWINTERP_KIND"].value = "not_a_kind"
     with pytest.raises(ValueError, match="TDSWINTERP_KIND"):
@@ -400,8 +415,8 @@ def test_time_domain_sw_invalid_matern_nu_rejected(bad_nu):
     model, _ = _base_model_and_toas()
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
-    model["TDSWKERNEL"].value = "matern"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWKERNEL"].value = "MATERN"
+    model["TDSWLOGSIG"].value = 0.0
     model["TDSWLOGELL"].value = 1.0
     model["TDSWDT"].value = 30.0
     model["TDSWNU"].value = bad_nu
@@ -412,15 +427,15 @@ def test_time_domain_sw_invalid_matern_nu_rejected(bad_nu):
 def test_time_domain_sw_conflicting_dt_and_nodes_rejected():
     """Setting both a non-default TDSWDT and TDSWNODE_ parameters must raise ValueError.
 
-    ``_add_tdsw_node_component`` calls ``component.validate()`` internally once
+    ``add_tdsw_node_component`` calls ``component.validate()`` internally once
     two nodes are present, so the exception fires on the second ``add_tdsw_node_component``
     call rather than on an explicit ``model.validate()``.
     """
     model, _ = _base_model_and_toas()
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
-    component.TDSWKERNEL.value = "ridge"
-    component.TDSWLOGSIG.value = -7.0
+    component.TDSWKERNEL.value = "RIDGE"
+    component.TDSWLOGSIG.value = 0.0
     component.TDSWDT.value = 14.0  # non-default: conflicts with nodes
     component.add_tdsw_node_component(55000.0, index=1)  # nset=1, no validate yet
     # Second node addition triggers internal validate() -> must raise.
@@ -433,8 +448,8 @@ def test_time_domain_sw_single_node_rejected():
     model, _ = _base_model_and_toas()
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
-    model["TDSWKERNEL"].value = "ridge"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWKERNEL"].value = "RIDGE"
+    model["TDSWLOGSIG"].value = 0.0
     component.add_tdsw_node_component(55000.0, index=1)
     with pytest.raises(ValueError, match="at least 2"):
         model.validate()
@@ -449,8 +464,8 @@ def test_time_domain_sw_duplicate_nodes_rejected():
     model, _ = _base_model_and_toas()
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
-    component.TDSWKERNEL.value = "ridge"
-    component.TDSWLOGSIG.value = -7.0
+    component.TDSWKERNEL.value = "RIDGE"
+    component.TDSWLOGSIG.value = 0.0
     component.add_tdsw_node_component(55000.0, index=1)  # nset=1, no validate yet
     # Second addition with same MJD triggers internal validate() -> must raise.
     with pytest.raises(ValueError, match="unique"):
@@ -462,11 +477,38 @@ def test_time_domain_sw_negative_dt_rejected():
     model, _ = _base_model_and_toas()
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
-    model["TDSWKERNEL"].value = "ridge"
-    model["TDSWLOGSIG"].value = -7.0
+    model["TDSWKERNEL"].value = "RIDGE"
+    model["TDSWLOGSIG"].value = 0.0
     model["TDSWDT"].value = -5.0
     with pytest.raises(ValueError, match="TDSWDT"):
         model.validate()
+
+
+@pytest.mark.parametrize(
+    "kernel_in, kind_in",
+    [
+        ("ridge", "linear"),
+        ("Ridge", "Linear"),
+        ("RIDGE", "LINEAR"),
+    ],
+)
+def test_time_domain_sw_value_case_is_normalised(kernel_in, kind_in):
+    """TDSWKERNEL / TDSWINTERP_KIND accept any case and are stored upper case."""
+    model, _ = _base_model_and_toas()
+    component = TimeDomainSWNoise()
+    model.add_component(component, validate=False)
+
+    model["TDSWKERNEL"].value = kernel_in
+    model["TDSWINTERP_KIND"].value = kind_in
+    model["TDSWDT"].value = 14.0
+    model["TDSWLOGSIG"].value = 0.0
+    model.validate()
+
+    assert model["TDSWKERNEL"].value == "RIDGE"
+    assert model["TDSWINTERP_KIND"].value == "LINEAR"
+    par_str = model.as_parfile()
+    assert re.search(r"TDSWKERNEL\s+RIDGE", par_str)
+    assert re.search(r"TDSWINTERP_KIND\s+LINEAR", par_str)
 
 
 # ---------------------------------------------------------------------------
@@ -474,17 +516,13 @@ def test_time_domain_sw_negative_dt_rejected():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kernel", ["ridge", "sqexp", "matern", "quasi_periodic"])
-def test_time_domain_sw_parfile_serialises_params(kernel):
-    """All TimeDomainSWNoise parameters appear in the serialised par string.
+@pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
+def test_time_domain_sw_parfile_roundtrips(kernel):
+    """TimeDomainSWNoise parameters are written to, and read back from, a par file.
 
-    ``TimeDomainSWNoise`` has ``register = False`` so ``get_model()`` will not
-    reconstruct it from a par file.  This test therefore validates that the
-    parameters are *written* correctly rather than testing a full read-back
-    roundtrip.
+    The component is registered, so ``get_model()`` reconstructs it from the
+    ``TDSW*`` parameters rather than requiring an explicit ``add_component``.
     """
-    import re
-
     model, _ = _base_model_and_toas()
     _add_time_domain_sw_component(model, kernel)
 
@@ -495,14 +533,36 @@ def test_time_domain_sw_parfile_serialises_params(kernel):
     ), f"Expected 'TDSWKERNEL {kernel}' in par string"
     assert "TDSWLOGSIG" in par_str
     assert "TDSWDT" in par_str
-    if kernel in ("sqexp", "matern", "quasi_periodic"):
+    if kernel in ("SQEXP", "MATERN", "QUASI_PERIODIC"):
         assert "TDSWLOGELL" in par_str
-    if kernel == "matern":
+    if kernel == "MATERN":
         assert "TDSWNU" in par_str
-    if kernel == "quasi_periodic":
+    if kernel == "QUASI_PERIODIC":
         assert "TDSWLOGGAMP" in par_str
         assert "TDSWLOGP" in par_str
-=======
+
+    # read it back: the component must be rebuilt with the same parameter values
+    model2 = get_model(StringIO(par_str))
+    assert "TimeDomainSWNoise" in model2.components
+    assert model2["TDSWKERNEL"].value == kernel
+    assert model2["TDSWINTERP_KIND"].value == model["TDSWINTERP_KIND"].value
+    for par in (
+        "TDSWDT",
+        "TDSWLOGSIG",
+        "TDSWLOGELL",
+        "TDSWNU",
+        "TDSWLOGGAMP",
+        "TDSWLOGP",
+    ):
+        assert model2[par].value == model[par].value, par
+
+
+def test_time_domain_sw_not_selected_without_tdsw_params():
+    """A par file with no TDSW* parameters must not pull in the component."""
+    model, _ = _base_model_and_toas()
+    assert "TimeDomainSWNoise" not in model.components
+
+
 @pytest.mark.parametrize("gp", ["Red", "DM"])
 def test_log_frequencies(gp):
     GP = gp.upper()
@@ -547,4 +607,3 @@ def test_log_frequencies(gp):
     m[f"TN{GP}TSPAN"].quantity = np.max(t_) - np.min(t_)
     M1 = m.noise_model_designmatrix(t)
     assert np.allclose(M0, M1)
->>>>>>> master
