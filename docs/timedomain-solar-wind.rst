@@ -524,7 +524,7 @@ years, sampled densely enough to resolve the annual structure.
    ax_dt.set_title("(d) ...gives a delay with a sharp cusp every year", fontsize=10)
    ax_dt.legend(fontsize=8, loc="upper left")
 
-   fig.subplots_adjust(left=0.07, right=0.99, top=0.94, bottom=0.09)
+   fig.subplots_adjust(left=0.10, right=0.99, top=0.94, bottom=0.09)
 
 Panel (a) is for B1855+09, whose ecliptic latitude keeps it from ever coming
 closer than about 32 degrees to the Sun; a pulsar nearer the ecliptic reaches
