@@ -1652,7 +1652,7 @@ class TimeDomainSWNoise(NoiseComponent):
                     "TimeDomainSWNoise TDSWDT must be set to a positive value."
                 )
 
-    def _has_nodes(self) -> bool:
+    def has_nodes(self) -> bool:
         """Return True if any TDSWNODE_ parameter is set."""
         node_map = self.get_prefix_mapping_component("TDSWNODE_")
         return any(
@@ -1660,7 +1660,7 @@ class TimeDomainSWNoise(NoiseComponent):
             for _, node_name in node_map.items()
         )
 
-    def _get_nodes(self, toas: TOAs) -> np.ndarray:
+    def get_nodes(self, toas: TOAs) -> np.ndarray:
         """Return sorted interpolation nodes (MJD) from TDSWNODE_ parameters."""
         node_map = self.get_prefix_mapping_component("TDSWNODE_")
         nodes = []
@@ -1676,7 +1676,7 @@ class TimeDomainSWNoise(NoiseComponent):
             "TimeDomainSWNoise node interpolation requires at least 2 TDSWNODE_ values."
         )
 
-    def _get_basis_and_nodes(self, toas: TOAs):
+    def get_basis_and_nodes(self, toas: TOAs):
         """Return ``(Umat, nodes)`` from the linear interpolation basis."""
         t = toas.get_tdb_seconds(dtype=np.float64)
         # scipy.interpolate.interp1d only accepts the lower-case spellings.
