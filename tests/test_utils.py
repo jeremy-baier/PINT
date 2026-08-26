@@ -972,9 +972,7 @@ def test_dmxsetup(N, mintoas, minwidth):
     assert np.all(NTime == N)
 
 
-# ---------------------------------------------------------------------------
 # get_phiinv
-# ---------------------------------------------------------------------------
 #
 # `get_phiinv` casts extended-precision input down to double precision (the
 # noise parameters do not need the extra precision, and Cholesky is only

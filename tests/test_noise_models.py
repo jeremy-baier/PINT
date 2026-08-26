@@ -283,9 +283,7 @@ def test_white_noise_model_derivs():
     )
 
 
-# ---------------------------------------------------------------------------
 # TimeDomainSWNoise – kernel parameter validation tests
-# ---------------------------------------------------------------------------
 
 
 def test_time_domain_sw_invalid_kernel_rejected():
@@ -320,9 +318,7 @@ def test_time_domain_sw_missing_required_param(kernel, missing_param):
         model.validate()
 
 
-# ---------------------------------------------------------------------------
 # TimeDomainSWNoise – node-based interpolation tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
@@ -369,9 +365,7 @@ def test_time_domain_sw_node_based_interpolation(kernel):
     assert np.allclose(cov, cov_from_basis)
 
 
-# ---------------------------------------------------------------------------
 # TimeDomainSWNoise – GLS fitter integration
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
@@ -397,9 +391,7 @@ def test_time_domain_sw_gls_fitter_runs(kernel):
     assert np.isfinite(chi2), f"chi2 is not finite for kernel '{kernel}'"
 
 
-# ---------------------------------------------------------------------------
 # TimeDomainSWNoise – wideband datasets and dense (2D) basis covariance
-# ---------------------------------------------------------------------------
 #
 # Every kernel other than RIDGE returns a full covariance matrix, which makes
 # `TimingModel.noise_model_basis_weight` block-diagonalise the per-component
@@ -526,9 +518,7 @@ def test_time_domain_sw_wideband_whitened_resids_dense_phi(wideband_base, kernel
     assert 0.2 < np.std(rw) < 5.0, f"whitened residual scale is off for '{kernel}'"
 
 
-# ---------------------------------------------------------------------------
 # TimeDomainSWNoise – validation edge cases
-# ---------------------------------------------------------------------------
 
 
 def test_time_domain_sw_invalid_interp_kind_rejected():
@@ -559,9 +549,7 @@ def test_time_domain_sw_invalid_matern_nu_rejected(bad_nu):
         model.validate()
 
 
-# ---------------------------------------------------------------------------
 # matern_kernel – all supported smoothness values
-# ---------------------------------------------------------------------------
 #
 # `validate` pins TDSWNU to {0.5, 1.5, 2.5}, and the rest of the test suite
 # only ever uses the 1.5 default, so the nu=0.5 and nu=2.5 closed forms are
@@ -734,9 +722,7 @@ def test_time_domain_sw_value_case_is_normalised(kernel_in, kind_in):
     assert re.search(r"TDSWINTERP_KIND\s+LINEAR", par_str)
 
 
-# ---------------------------------------------------------------------------
 # TimeDomainSWNoise – par-file serialisation roundtrip
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
