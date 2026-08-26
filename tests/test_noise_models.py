@@ -13,6 +13,7 @@ from pint.models.timing_model import Component
 from pint.models.noise_model import NoiseComponent
 from pint.models.noise_model import (
     TimeDomainSWNoise,
+    make_interpolation_basis,
     matern_kernel,
     project_basis_covariance,
 )
@@ -456,6 +457,181 @@ def test_add_tdsw_node_component_auto_index_yields_usable_basis():
     assert basis.shape == (len(toas), weights.shape[0])
     assert np.ndim(weights) == 2
     assert_allclose(weights, weights.T)
+
+
+# TimeDomainSWNoise – defensive error branches
+#
+# These guards are all unreachable through the normal model-building path
+# (`validate` screens most of them first), so they are driven directly here.
+
+
+def test_get_nodes_skips_unset_slots():
+    """`get_nodes` must ignore TDSWNODE_ parameters that were never given a value."""
+    _, toas, component = _bare_tdsw_component()
+
+    # Leaves the default TDSWNODE_0001 unset while creating 0002 and 0003.
+    component.add_tdsw_node_component(54500.0, index=2)
+    component.add_tdsw_node_component(54000.0, index=3)
+
+    assert list(component.get_prefix_mapping_component("TDSWNODE_")) == [1, 2, 3]
+    assert component.TDSWNODE_0001.value is None
+
+    # Only the two set nodes are returned, and they come back sorted.
+    assert_allclose(component.get_nodes(toas), [54000.0, 54500.0])
+
+
+def test_get_nodes_requires_at_least_two_nodes():
+    """`get_nodes` must raise when fewer than two TDSWNODE_ values are set."""
+    _, toas, component = _bare_tdsw_component()
+
+    with pytest.raises(ValueError, match="at least 2 TDSWNODE_"):
+        component.get_nodes(toas)
+
+    component.add_tdsw_node_component(54000.0)
+    with pytest.raises(ValueError, match="at least 2 TDSWNODE_"):
+        component.get_nodes(toas)
+
+
+def test_validate_rejects_non_finite_nodes():
+    """A non-finite TDSWNODE_ value must be rejected by `validate`."""
+    _, _, component = _bare_tdsw_component()
+    component.add_tdsw_node_component(54000.0, index=1)
+    component.add_tdsw_node_component(54500.0, index=2)
+
+    component.TDSWNODE_0002.value = np.inf
+    with pytest.raises(ValueError, match="must be finite"):
+        component.validate()
+
+    component.TDSWNODE_0002.value = np.nan
+    with pytest.raises(ValueError, match="must be finite"):
+        component.validate()
+
+
+def test_get_noise_weights_rejects_unknown_kernel():
+    """The kernel dispatch must fail loudly if `validate` was bypassed.
+
+    `validate` normally screens TDSWKERNEL, so this branch is only reachable
+    when the value is set directly on the component.
+    """
+    _, toas, component = _bare_tdsw_component()
+    component.TDSWKERNEL.value = "BOGUS"
+
+    with pytest.raises(ValueError, match="unknown TDSWKERNEL 'BOGUS'"):
+        component.get_noise_weights(toas)
+
+
+def test_make_interpolation_basis_requires_nodes_or_dt():
+    """Neither nodes nor dt leaves nothing to build a basis from."""
+    toas = np.array([54000.0, 54100.0]) * 86400.0
+
+    with pytest.raises(ValueError, match="either nodes or dt"):
+        make_interpolation_basis(toas)
+
+
+def test_make_interpolation_basis_rejects_nodes_without_support():
+    """Nodes far outside the TOA range give an all-zero basis, which must raise.
+
+    This is the guard against passing TOAs and nodes in mismatched units: the
+    interpolation fills with 0.0 outside the node range, so every column would
+    be dropped by the rank reduction.
+    """
+    toas = np.array([54000.0, 54100.0]) * 86400.0  # seconds
+    nodes = np.array([10.0, 20.0])  # MJD, nowhere near the TOAs
+
+    with pytest.raises(RuntimeError, match="no support in the TOA range"):
+        make_interpolation_basis(toas, nodes=nodes)
+
+
+# project_basis_covariance – dispatch on the shape of Phi
+#
+# `project_basis_covariance` treats a 1D Phi as the diagonal of a diagonal
+# covariance and a 2D Phi as a full covariance.  Anything else is a caller
+# error; there is no meaningful Phi with any other number of dimensions.
+
+
+def test_project_basis_covariance_diagonal_matches_dense():
+    """A 1D Phi must give the same projection as the equivalent dense matrix."""
+    U = np.arange(10.0).reshape(5, 2)
+    phi = np.array([2.0, 3.0])
+
+    from_diag = project_basis_covariance(U, phi)
+    from_dense = project_basis_covariance(U, np.diag(phi))
+
+    assert from_diag.shape == (5, 5)
+    assert_allclose(from_diag, from_dense)
+
+
+@pytest.mark.parametrize(
+    "bad_phi, label",
+    [(np.ones((2, 2, 2)), "3D"), (np.float64(1.0), "scalar")],
+    ids=["3d", "scalar"],
+)
+def test_project_basis_covariance_rejects_bad_ndim(bad_phi, label):
+    """Phi with any dimensionality other than 1 or 2 must be rejected."""
+    U = np.arange(10.0).reshape(5, 2)
+    assert np.ndim(bad_phi) not in (1, 2)
+
+    with pytest.raises(ValueError, match="Phi must be 1D or 2D"):
+        project_basis_covariance(U, bad_phi)
+
+
+# make_fake_toas – injecting correlated noise from a dense Phi
+#
+# With only Fourier-basis components Phi is 1D and the coefficients are drawn
+# independently.  A non-RIDGE TimeDomainSWNoise makes Phi 2D, which requires a
+# correlated multivariate draw instead.
+
+
+def _simulate_tdsw_toas(log10_sigma, seed, add_correlated_noise=True):
+    """Simulate TOAs from a SQEXP TimeDomainSWNoise model and return their RMS."""
+    from pint.residuals import Residuals
+
+    model, _ = _base_model_and_toas()
+    _add_time_domain_sw_component(model, "SQEXP")
+    model["TDSWLOGSIG"].value = log10_sigma
+
+    np.random.seed(seed)
+    toas = make_fake_toas_uniform(
+        54500,
+        55500,
+        40,
+        model=model,
+        add_noise=False,
+        add_correlated_noise=add_correlated_noise,
+    )
+    resids = Residuals(toas, model).time_resids.to_value(u.us)
+    return model, toas, float(np.std(resids))
+
+
+def test_make_fake_toas_injects_correlated_noise_from_dense_phi():
+    """A 2D Phi must produce a correlated multivariate draw, not a white one."""
+    model, toas, rms_correlated = _simulate_tdsw_toas(0.0, seed=0)
+
+    # Confirm the dense branch is the one being taken.
+    assert np.ndim(model.noise_model_basis_weight(toas)) == 2
+
+    _, _, rms_baseline = _simulate_tdsw_toas(0.0, seed=0, add_correlated_noise=False)
+
+    assert np.isfinite(rms_correlated)
+    # Without correlated noise the residuals are numerically zero, so the
+    # injected GP dominates by orders of magnitude.
+    assert rms_correlated > 100 * rms_baseline
+
+    # Same seed, same realization.
+    assert rms_correlated == _simulate_tdsw_toas(0.0, seed=0)[2]
+
+
+def test_make_fake_toas_correlated_noise_scales_with_amplitude():
+    """The injected signal must scale with TDSWLOGSIG, i.e. the draw uses Phi.
+
+    The ratio is well below the nominal factor of 10 because the timing model
+    absorbs part of the injected signal, and absorbs a different fraction at
+    each amplitude, so only a loose bound is asserted.
+    """
+    _, _, rms_low = _simulate_tdsw_toas(0.0, seed=0)
+    _, _, rms_high = _simulate_tdsw_toas(1.0, seed=0)
+
+    assert rms_high > 2 * rms_low
 
 
 # TimeDomainSWNoise – GLS fitter integration
