@@ -13,6 +13,7 @@ from pint.models.timing_model import Component
 from pint.models.noise_model import NoiseComponent
 from pint.models.noise_model import (
     TimeDomainSWNoise,
+    matern_kernel,
     project_basis_covariance,
 )
 from pint.simulation import make_fake_toas_uniform
@@ -74,13 +75,16 @@ def _base_model_and_toas():
     return get_model_and_toas(parfile, timfile)
 
 
-def _add_time_domain_sw_component(model, kernel):
+def _add_time_domain_sw_component(model, kernel, nu=1.5):
     """Attach a TimeDomainSWNoise component configured for the given kernel.
 
     Parameters
     ----------
     kernel : str
         One of ``'ridge'``, ``'sqexp'``, ``'matern'``, ``'quasi_periodic'``.
+    nu : float
+        Matern smoothness, one of ``{0.5, 1.5, 2.5}``.  Ignored unless
+        ``kernel == 'MATERN'``.
     """
     component = TimeDomainSWNoise()
     model.add_component(component, validate=False)
@@ -96,7 +100,7 @@ def _add_time_domain_sw_component(model, kernel):
         model["TDSWLOGELL"].value = 1.2
     elif kernel == "MATERN":
         model["TDSWLOGELL"].value = 1.0
-        model["TDSWNU"].value = 1.5
+        model["TDSWNU"].value = nu
     elif kernel == "QUASI_PERIODIC":
         model["TDSWLOGELL"].value = 1.1
         model["TDSWLOGGAMP"].value = -0.2
@@ -553,6 +557,94 @@ def test_time_domain_sw_invalid_matern_nu_rejected(bad_nu):
     model["TDSWNU"].value = bad_nu
     with pytest.raises(ValueError, match="TDSWNU"):
         model.validate()
+
+
+# ---------------------------------------------------------------------------
+# matern_kernel – all supported smoothness values
+# ---------------------------------------------------------------------------
+#
+# `validate` pins TDSWNU to {0.5, 1.5, 2.5}, and the rest of the test suite
+# only ever uses the 1.5 default, so the nu=0.5 and nu=2.5 closed forms are
+# checked here against the general Matern function.
+
+
+def _matern_reference(r, sigma, ell, nu):
+    """Matern covariance from the general Bessel form, independent of PINT.
+
+    :math:`K(r) = \\sigma^2 \\frac{2^{1-\\nu}}{\\Gamma(\\nu)}
+    \\left(\\sqrt{2\\nu}\\,r/\\ell\\right)^{\\nu}
+    K_{\\nu}\\!\\left(\\sqrt{2\\nu}\\,r/\\ell\\right)`, which is singular at
+    :math:`r = 0` and equals :math:`\\sigma^2` in the limit.
+    """
+    from scipy.special import gamma, kv
+
+    rr = np.sqrt(2 * nu) * r / ell
+    out = np.empty_like(rr)
+    at_zero = rr == 0
+    out[at_zero] = 1.0
+    z = rr[~at_zero]
+    out[~at_zero] = (2 ** (1 - nu) / gamma(nu)) * z**nu * kv(nu, z)
+    return sigma**2 * out
+
+
+@pytest.mark.parametrize("nu", [0.5, 1.5, 2.5])
+def test_matern_kernel_matches_general_bessel_form(nu):
+    """Each hard-coded closed form must reproduce the general Matern function.
+
+    This checks the constants (sqrt(3), sqrt(5), 5/3) rather than restating
+    them, so a transposed coefficient between branches would be caught.
+    """
+    nodes = np.array([0.0, 10.0, 25.0, 60.0, 130.0]) * 86400.0
+    log10_sigma, log10_ell = -7.0, 2.0
+    sigma = 10**log10_sigma
+    ell = 10**log10_ell * 86400.0
+
+    K = matern_kernel(nodes, log10_sigma, log10_ell, nu)
+
+    r = np.abs(nodes[None, :] - nodes[:, None])
+    jitter = np.eye(len(nodes)) * (sigma / 50000) ** 2
+    expected = _matern_reference(r, sigma, ell, nu) + jitter
+
+    assert_allclose(K, expected, rtol=1e-10, atol=0)
+
+
+@pytest.mark.parametrize("nu", [0.5, 1.5, 2.5])
+def test_matern_kernel_is_a_valid_covariance(nu):
+    """The kernel must be symmetric, positive definite and decreasing in lag."""
+    nodes = np.arange(0.0, 200.0, 20.0) * 86400.0
+    K = matern_kernel(nodes, log10_sigma=-7.0, log10_ell=2.0, nu=nu)
+
+    assert K.shape == (len(nodes), len(nodes))
+    assert_allclose(K, K.T)
+    np.linalg.cholesky(K)  # raises if not positive definite
+
+    # Uniformly spaced nodes, so row 0 is the kernel sampled at increasing lag.
+    lags = K[0]
+    assert np.all(np.diff(lags) < 0), f"matern nu={nu} is not decreasing in lag"
+
+
+def test_matern_kernel_rejects_unsupported_nu():
+    """`matern_kernel` guards nu itself, independently of `TimingModel.validate`."""
+    nodes = np.array([0.0, 10.0, 25.0]) * 86400.0
+    with pytest.raises(ValueError, match="nu in"):
+        matern_kernel(nodes, -7.0, 2.0, nu=1.0)
+
+
+@pytest.mark.parametrize("nu", [0.5, 1.5, 2.5])
+def test_time_domain_sw_matern_nu_variants(nu):
+    """Every allowed TDSWNU must validate and yield a usable dense weight matrix."""
+    model, toas = _base_model_and_toas()
+    component = _add_time_domain_sw_component(model, "MATERN", nu=nu)
+
+    assert model["TDSWNU"].value == nu
+
+    Phi = component.get_noise_weights(toas)
+    Umat = component.get_noise_basis(toas)
+
+    assert np.ndim(Phi) == 2
+    assert Phi.shape[0] == Phi.shape[1] == Umat.shape[1]
+    assert_allclose(Phi, Phi.T)
+    np.linalg.cholesky(Phi)
 
 
 def test_time_domain_sw_conflicting_dt_and_nodes_rejected():
