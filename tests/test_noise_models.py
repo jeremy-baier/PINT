@@ -2,9 +2,11 @@
 and PLDMNoise give the same result as the old code."""
 
 import re
+from copy import deepcopy
 
 import numpy as np
 import pytest
+from numpy.testing import assert_allclose
 from pint.config import examplefile
 from pint.models import get_model_and_toas, get_model
 from pint.models.timing_model import Component
@@ -389,6 +391,135 @@ def test_time_domain_sw_gls_fitter_runs(kernel):
 
     chi2 = f.resids.chi2
     assert np.isfinite(chi2), f"chi2 is not finite for kernel '{kernel}'"
+
+
+# ---------------------------------------------------------------------------
+# TimeDomainSWNoise – wideband datasets and dense (2D) basis covariance
+# ---------------------------------------------------------------------------
+#
+# Every kernel other than RIDGE returns a full covariance matrix, which makes
+# `TimingModel.noise_model_basis_weight` block-diagonalise the per-component
+# weights into a 2D Phi.  The tests below drive that Phi through the wideband
+# machinery: `WidebandTOAFitter.fit_toas`, `TimingModel.wideband_covariance_matrix`
+# and `WidebandTOAResiduals.calc_wideband_whitened_resids`.
+
+
+@pytest.fixture(scope="module")
+def wideband_base():
+    """A B1855+09 model stripped of DMX/JUMP/FD, plus matching wideband TOAs.
+
+    DMX and JUMP ranges have no support in the simulated TOAs and would abort
+    the fit in validation before any linear algebra runs; FD is dropped for the
+    same reason.  The TOAs do not depend on the noise kernel, so they are built
+    once and shared.
+    """
+    model = get_model(examplefile("B1855+09_NANOGrav_9yv1.gls.par"))
+    for component in ("DispersionDMX", "PhaseJump", "FD"):
+        model.remove_component(component)
+    toas = make_fake_toas_uniform(
+        54500,
+        55500,
+        50,
+        model=model,
+        freq=1400 * u.MHz,
+        wideband=True,
+        add_noise=True,
+    )
+    return model, toas
+
+
+def _wideband_model_and_toas(wideband_base, kernel):
+    """Attach a `TimeDomainSWNoise` component to a copy of the shared model."""
+    base_model, toas = wideband_base
+    model = deepcopy(base_model)
+    _add_time_domain_sw_component(model, kernel)
+    # Fitting the full binary model on 50 simulated TOAs drives SINI out of
+    # range; the dense-covariance code path is exercised just as well by a
+    # small, well-conditioned subset of free parameters.
+    model.free_params = ["F0", "F1", "DM"]
+    return model, toas
+
+
+@pytest.mark.parametrize("kernel", ["SQEXP", "MATERN", "QUASI_PERIODIC"])
+def test_time_domain_sw_wideband_basis_weight_is_dense(wideband_base, kernel):
+    """Non-RIDGE kernels must make the joint basis covariance a 2D matrix."""
+    model, toas = _wideband_model_and_toas(wideband_base, kernel)
+
+    Phi = model.noise_model_basis_weight(toas)
+    U = model.noise_model_wideband_designmatrix(toas)
+
+    assert np.ndim(Phi) == 2, f"kernel '{kernel}' did not produce a 2D Phi"
+    assert Phi.shape[0] == Phi.shape[1] == U.shape[1]
+    assert U.shape[0] == 2 * len(toas)
+    assert_allclose(Phi, Phi.T)
+    # Block-diagonal by construction, so it must be positive definite.
+    np.linalg.cholesky(Phi)
+
+
+@pytest.mark.parametrize("kernel", ["SQEXP", "MATERN", "QUASI_PERIODIC"])
+def test_time_domain_sw_wideband_covariance_matrix_dense(wideband_base, kernel):
+    """`wideband_covariance_matrix` must project a 2D Phi as U @ Phi @ U.T."""
+    model, toas = _wideband_model_and_toas(wideband_base, kernel)
+
+    C = model.wideband_covariance_matrix(toas)
+    U = model.noise_model_wideband_designmatrix(toas)
+    Phi = model.noise_model_basis_weight(toas)
+    N = np.diag(model.scaled_wideband_uncertainty(toas) ** 2)
+
+    assert C.shape == (2 * len(toas), 2 * len(toas))
+    assert np.all(np.isfinite(C))
+    assert_allclose(C, C.T)
+    assert_allclose(C, N + U @ Phi @ U.T, rtol=1e-10, atol=0)
+
+
+@pytest.mark.parametrize("kernel", ["RIDGE", "SQEXP", "MATERN", "QUASI_PERIODIC"])
+def test_time_domain_sw_wideband_fit_dense_phi_matches_full_cov(wideband_base, kernel):
+    """The Woodbury and explicit-covariance branches must agree.
+
+    With a 2D Phi, `full_cov=False` inverts Phi and adds it to the normal
+    matrix, while `full_cov=True` builds the dense data-space covariance and
+    Cholesky-solves against it.  The two are algebraically identical, so a
+    mismatch means one of the dense-Phi branches is wrong.
+    """
+    from pint import fitter
+
+    model, toas = _wideband_model_and_toas(wideband_base, kernel)
+
+    f_woodbury = fitter.WidebandTOAFitter(toas, model)
+    chi2_woodbury = f_woodbury.fit_toas(maxiter=1, full_cov=False)
+
+    f_fullcov = fitter.WidebandTOAFitter(toas, model)
+    chi2_fullcov = f_fullcov.fit_toas(maxiter=1, full_cov=True)
+
+    assert np.isfinite(chi2_woodbury)
+    assert_allclose(chi2_woodbury, chi2_fullcov, rtol=1e-6)
+
+    for param in model.free_params:
+        assert_allclose(
+            getattr(f_woodbury.model, param).value,
+            getattr(f_fullcov.model, param).value,
+            rtol=1e-6,
+            err_msg=f"{param} differs between full_cov modes for kernel '{kernel}'",
+        )
+
+
+@pytest.mark.parametrize("kernel", ["SQEXP", "MATERN", "QUASI_PERIODIC"])
+def test_time_domain_sw_wideband_whitened_resids_dense_phi(wideband_base, kernel):
+    """Whitening wideband residuals against a 2D Phi must give unit-scale output."""
+    from pint import fitter
+
+    model, toas = _wideband_model_and_toas(wideband_base, kernel)
+
+    f = fitter.WidebandTOAFitter(toas, model)
+    f.fit_toas(maxiter=1)
+
+    rw = f.resids.calc_wideband_whitened_resids()
+
+    assert rw.shape == (2 * len(toas),)
+    assert np.all(np.isfinite(rw))
+    # Correctly whitened residuals are unit-normal; a broken 2D branch shows up
+    # as a scale error of orders of magnitude rather than a marginal one.
+    assert 0.2 < np.std(rw) < 5.0, f"whitened residual scale is off for '{kernel}'"
 
 
 # ---------------------------------------------------------------------------

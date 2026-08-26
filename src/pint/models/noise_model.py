@@ -1216,7 +1216,7 @@ class PLRedNoise(CorrelatedNoiseComponent):
         return project_basis_covariance(Fmat, phi)
 
 
-class TimeDomainSWNoise(NoiseComponent):
+class TimeDomainSWNoise(CorrelatedNoiseComponent):
     """Time-domain solar wind noise model with a selectable GP kernel.
 
     Solar wind electron number density fluctuations produce dispersive delays
@@ -1395,7 +1395,6 @@ class TimeDomainSWNoise(NoiseComponent):
     register = True
     category = "SW_noise"
 
-    introduces_correlated_errors = True
     introduces_dm_errors = True
     is_time_correlated = True
 
@@ -1681,8 +1680,8 @@ class TimeDomainSWNoise(NoiseComponent):
         t = toas.get_tdb_seconds(dtype=np.float64)
         # scipy.interpolate.interp1d only accepts the lower-case spellings.
         interp_kind = self.TDSWINTERP_KIND.value.lower()
-        if self._has_nodes():
-            nodes_in = self._get_nodes(toas)
+        if self.has_nodes():
+            nodes_in = self.get_nodes(toas)
             Umat, nodes = make_interpolation_basis(t, nodes=nodes_in, kind=interp_kind)
         else:
             dt = 30.0 if self.TDSWDT.value is None else self.TDSWDT.value
@@ -1692,7 +1691,7 @@ class TimeDomainSWNoise(NoiseComponent):
     def get_noise_basis(self, toas: TOAs) -> np.ndarray:
         """Return chromatic linear interpolation matrix for time-domain SW noise."""
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
-        Umat, _ = self._get_basis_and_nodes(toas)
+        Umat, _ = self.get_basis_and_nodes(toas)
         # Solar wind geometry from pint.models.solar_wind_dispersion.SolarWindDispersion.
         # This is the SW DM contribution if n_earth = 1 cm^-3; the GP scales it.
         solar_wind_geometry = self._parent.solar_wind_geometry(toas)
@@ -1713,7 +1712,7 @@ class TimeDomainSWNoise(NoiseComponent):
         * **QUASI_PERIODIC**
           :math:`K_{SE}(t_i,t_j) \\cdot \\exp\\!\\left(-\\Gamma_p \\sin^2\\!\\frac{\\pi(t_i-t_j)}{p}\\right)`
         """
-        _, nodes = self._get_basis_and_nodes(toas)
+        _, nodes = self.get_basis_and_nodes(toas)
         kernel = self.TDSWKERNEL.value.upper()
         log10_sigma = self.TDSWLOGSIG.value
 
