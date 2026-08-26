@@ -365,6 +365,99 @@ def test_time_domain_sw_node_based_interpolation(kernel):
     assert np.allclose(cov, cov_from_basis)
 
 
+def _bare_tdsw_component(kernel="RIDGE"):
+    """A minimally configured TimeDomainSWNoise attached to a real model.
+
+    Kernel parameters are set up front because ``add_tdsw_node_component``
+    calls ``validate`` as soon as two nodes are present.  TDSWDT is left at its
+    30.0 default so that it does not count as a competing interpolation mode.
+    """
+    model, toas = _base_model_and_toas()
+    component = TimeDomainSWNoise()
+    model.add_component(component, validate=False)
+    component.TDSWKERNEL.value = kernel
+    component.TDSWLOGSIG.value = 0.0
+    component.TDSWINTERP_KIND.value = "LINEAR"
+    return model, toas, component
+
+
+def test_add_tdsw_node_component_auto_index_reuses_empty_slot():
+    """With index=None the lowest unset TDSWNODE_ slot must be filled first."""
+    _, _, component = _bare_tdsw_component()
+
+    # A fresh component ships with a single, unset TDSWNODE_0001.
+    assert list(component.get_prefix_mapping_component("TDSWNODE_")) == [1]
+    assert component.TDSWNODE_0001.value is None
+
+    index = component.add_tdsw_node_component(54000.0)
+
+    assert int(index) == 1
+    assert component.TDSWNODE_0001.value == 54000.0
+    # No new parameter was created; the empty slot was reused.
+    assert list(component.get_prefix_mapping_component("TDSWNODE_")) == [1]
+
+
+def test_add_tdsw_node_component_auto_index_appends_when_full():
+    """With index=None and no free slot, a new TDSWNODE_ must be appended."""
+    _, _, component = _bare_tdsw_component()
+
+    first = component.add_tdsw_node_component(54000.0)
+    second = component.add_tdsw_node_component(54500.0)
+    third = component.add_tdsw_node_component(55000.0)
+
+    assert [int(i) for i in (first, second, third)] == [1, 2, 3]
+    assert list(component.get_prefix_mapping_component("TDSWNODE_")) == [1, 2, 3]
+    assert component.TDSWNODE_0002.value == 54500.0
+    assert component.TDSWNODE_0003.value == 55000.0
+
+
+def test_add_tdsw_node_component_accepts_quantity():
+    """A Quantity node must be converted to days, matching the plain-float form."""
+    _, _, from_float = _bare_tdsw_component()
+    from_float.add_tdsw_node_component(54000.0)
+    from_float.add_tdsw_node_component(54500.0)
+
+    _, _, from_quantity = _bare_tdsw_component()
+    from_quantity.add_tdsw_node_component(54000.0 * u.day)
+    # Also check a unit that actually needs converting.
+    from_quantity.add_tdsw_node_component((54500.0 * u.day).to(u.hour))
+
+    assert from_quantity.TDSWNODE_0001.value == from_float.TDSWNODE_0001.value
+    assert_allclose(
+        float(from_quantity.TDSWNODE_0002.value),
+        float(from_float.TDSWNODE_0002.value),
+    )
+
+
+def test_add_tdsw_node_component_rejects_used_index():
+    """Re-using an occupied index must raise rather than silently overwrite."""
+    _, _, component = _bare_tdsw_component()
+    component.add_tdsw_node_component(54000.0, index=1)
+
+    with pytest.raises(ValueError, match="already in use"):
+        component.add_tdsw_node_component(55000.0, index=1)
+
+    # The original value survives the failed insert.
+    assert component.TDSWNODE_0001.value == 54000.0
+
+
+def test_add_tdsw_node_component_auto_index_yields_usable_basis():
+    """Nodes added without explicit indices must produce a working GP basis."""
+    _, toas, component = _bare_tdsw_component(kernel="SQEXP")
+    component.TDSWLOGELL.value = 1.2
+
+    t_mjd = toas.get_mjds().value
+    step = (t_mjd.max() - t_mjd.min()) / 10
+    for node in np.arange(t_mjd.min() - step, t_mjd.max() + step, step):
+        component.add_tdsw_node_component(float(node))
+
+    basis, weights = component.sw_basis_weight_pair(toas)
+
+    assert basis.shape == (len(toas), weights.shape[0])
+    assert np.ndim(weights) == 2
+    assert_allclose(weights, weights.T)
+
+
 # TimeDomainSWNoise – GLS fitter integration
 
 
