@@ -74,7 +74,44 @@ def test_mjd_conventions():
     assert si.mjd_from_ymd("18581117") == 0
     assert si.mjd_from_ymd("20041028") == 53306
     assert si.ACE_EPOCH_MJD == 50083
-    assert si.mjd_from_year_month("2004-10") == si.mjd_from_ymd("20041015")
+
+
+def test_monthly_epoch_is_the_middle_of_the_month():
+    """A monthly mean sits at the mid-point of its month, not on day 15.
+
+    It is the arithmetic mean of the daily values over the calendar month, so its
+    epoch is the mean of the days averaged: mjd0 + (N - 1) / 2 for an N-day month,
+    with daily epochs at 0h as the other parsers in this module produce them.
+    """
+    # October has 31 days, so the mid-point is the 16th at 0h
+    assert si.mjd_from_year_month("2004-10") == si.mjd_from_ymd("20041016")
+    # April has 30, giving the 15th at 12h
+    assert si.mjd_from_year_month("2004-04") == si.mjd_from_ymd("20040415") + 0.5
+    # February: 29 days in a leap year, 28 otherwise
+    assert si.mjd_from_year_month("2004-02") == si.mjd_from_ymd("20040215")
+    assert si.mjd_from_year_month("2003-02") == si.mjd_from_ymd("20030214") + 0.5
+    # and day 15 flat would be early, which is the thing being avoided
+    assert si.mjd_from_year_month("2004-10") - si.mjd_from_ymd("20041015") == 1.0
+
+
+def test_monthly_cadence_survives_the_exact_epochs():
+    """Exact mid-month epochs are unevenly spaced; the median cadence must hold.
+
+    ``SWPRSMOOTH`` is converted to a sample count using the median cadence of the
+    series, so a monthly series has to keep reporting about 30 d. Consecutive
+    mid-points are half the sum of the two month lengths apart, so the spacing
+    runs 29.5 to 31 d rather than being constant.
+    """
+    mjd = np.array(
+        [
+            si.mjd_from_year_month(f"{year}-{month:02d}")
+            for year in range(2000, 2005)
+            for month in range(1, 13)
+        ]
+    )
+    spacing = np.diff(mjd)
+    assert 30.0 <= np.median(spacing) <= 31.0
+    assert spacing.min() >= 29.5 and spacing.max() <= 31.0
 
 
 # ---------------------------------------------------------------------------

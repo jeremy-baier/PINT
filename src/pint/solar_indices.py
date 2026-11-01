@@ -11,15 +11,33 @@ astropy download cache by URL, expires entries against an update interval, and
 on a network error warns and returns the stale cached copy rather than raising.
 That last behaviour is what makes this safe to call from a long analysis run.
 
-Series are resolved in three tiers, similar to how
+Series are resolved in two tiers, similar to how
 :func:`pint.observatory.find_clock_file` is used for clock corrections:
 
 1. an explicit *path* argument, or the directory named by ``$PINT_SOLAR_INDICES``
 2. the upstream source, downloaded and cached
-3. a derived fallback bundled in ``pint/data/runtime/``
 
-Tier 1 sets an analysis to a fixed snapshot so the
-content at a fixed upstream URL changes as new data arrive.
+Tier 1 is what pins an analysis to a fixed snapshot, because the content behind a
+fixed upstream URL changes as new data arrive.
+
+Nothing is bundled with PINT. A snapshot of a product that grows every month would
+be out of date the day it shipped, and :func:`get_file` already falls back to the
+stale cached copy with a warning rather than raising when the network is
+unreachable, so a long run does not die for want of a shipped file.
+
+When neither tier can supply the series, hand the arrays over directly with
+:meth:`pint.models.solar_wind_dispersion.SolarWindProxyRegression.set_proxy`.
+``ace_density``, which has no automatic download, is the usual case.
+
+.. warning::
+
+   A model whose series came from ``set_proxy`` **cannot be written to a par file
+   or rebuilt from one**: a par file names a series through ``SWPRSOURCE`` but has
+   nowhere to put several thousand numbers, so writing it out and reading it back
+   gives a different model. ``set_proxy`` warns for that reason. It is a last
+   resort in the sense of being what is left when tiers 1 and 2 cannot deliver,
+   not in lookup order: arrays already loaded take precedence over
+   ``SWPRSOURCE``, which is resolved only when there are none.
 
 Examples
 --------
@@ -34,6 +52,7 @@ Examples
 
 import json
 import os
+from calendar import monthrange
 from collections import namedtuple
 from datetime import date
 from pathlib import Path
@@ -42,7 +61,6 @@ from warnings import warn
 import numpy as np
 from loguru import logger as log
 
-from pint.config import runtimefile
 from pint.observatory.global_clock_corrections import get_file
 
 __all__ = [
@@ -83,11 +101,21 @@ def mjd_from_ymd(yyyymmdd):
 def mjd_from_year_month(tag):
     """MJD of the middle of a month, from a ``YYYY-MM`` tag.
 
-    Day 15 by convention, matching how monthly solar indices are normally plotted
-    against time.
+    A monthly index is the arithmetic mean of the daily values over the calendar
+    month, so the epoch it belongs at is the middle of that month, not a fixed day
+    number. Daily epochs in this module are the MJD of the day at 0h, so the mean
+    epoch of an N-day month beginning at ``mjd0`` is ``mjd0 + (N - 1) / 2``: a
+    31-day month lands on the 16th at 0h and a 30-day month on the 15th at 12h.
+
+    Day 15 flat, which is the approximation upstream documentation means by "the
+    middle of the month", is early by 0.719 d on average over the NOAA record,
+    +1.0 d for a 31-day month and -0.5 d for a non-leap February. The resulting
+    change in a sunspot-driven n_E is 0.008 cm^-3 rms at ``SWPRSMOOTH=81``, so it
+    moves nothing measurable; it is done exactly because it costs nothing to.
     """
     year, month = (int(x) for x in tag.split("-")[:2])
-    return date(year, month, 15).toordinal() - MJD_ORDINAL_OFFSET
+    first = date(year, month, 1).toordinal() - MJD_ORDINAL_OFFSET
+    return first + (monthrange(year, month)[1] - 1) / 2.0
 
 
 # ── parsers ───────────────────────────────────────────────────────────────────
@@ -360,18 +388,12 @@ def get_series(name="f107", download_policy="if_expired", path=None, **parser_kw
                 f"Could not obtain solar index {name} from {source.url_base}: {e}"
             )
 
-    fallback = Path(runtimefile(source.filename))
-    if fallback.exists():
-        warn(
-            f"Solar index {name} is being read from the bundled fallback "
-            f"{fallback}, which is a snapshot and will be out of date. Set "
-            f"${pint_solar_env_var} or allow a download to use current data."
-        )
-        return source.parser(fallback, **parser_kwargs)
-
+    # Nothing is bundled with PINT, by design; see the module docstring. A series
+    # that neither tier can supply is passed to set_proxy() by hand instead.
     hint = (
         f" There is no automatic download for {name}; export it and pass it as "
-        f"path=, or put it in ${pint_solar_env_var}."
+        f"path=, put it in ${pint_solar_env_var}, or hand the arrays to "
+        f"SolarWindProxyRegression.set_proxy(), which is not serialisable."
         if source.url_base is None
         else ""
     )
