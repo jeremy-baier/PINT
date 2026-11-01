@@ -53,9 +53,9 @@ Examples
 import json
 import os
 from calendar import monthrange
-from collections import namedtuple
 from datetime import date
 from pathlib import Path
+from typing import Callable, List, Literal, NamedTuple, Optional, Tuple, Union
 from warnings import warn
 
 import numpy as np
@@ -92,13 +92,13 @@ MJD_ORDINAL_OFFSET = date(1858, 11, 17).toordinal()
 ACE_EPOCH_MJD = date(1996, 1, 1).toordinal() - MJD_ORDINAL_OFFSET
 
 
-def mjd_from_ymd(yyyymmdd):
+def mjd_from_ymd(yyyymmdd: Union[int, str]) -> int:
     """Integer MJD from an integer or string date of the form YYYYMMDD."""
     s = str(int(yyyymmdd))
     return date(int(s[:4]), int(s[4:6]), int(s[6:8])).toordinal() - MJD_ORDINAL_OFFSET
 
 
-def mjd_from_year_month(tag):
+def mjd_from_year_month(tag: str) -> float:
     """MJD of the middle of a month, from a ``YYYY-MM`` tag.
 
     A monthly index is the arithmetic mean of the daily values over the calendar
@@ -123,7 +123,9 @@ def mjd_from_year_month(tag):
 # Each returns (mjd, value), sorted by mjd, with missing data removed.
 
 
-def parse_drao_f107(path, column="fluxadjflux"):
+def parse_drao_f107(
+    path: Union[str, Path], column: str = "fluxadjflux"
+) -> Tuple[np.ndarray, np.ndarray]:
     """Daily F10.7 from the DRAO/Penticton ``fluxtable.txt``.
 
     The file carries roughly three measurements a day (17:00, 20:00 and 23:00 UT),
@@ -191,7 +193,7 @@ def parse_drao_f107(path, column="fluxadjflux"):
     return mjd, flux
 
 
-def parse_noaa(path, key):
+def parse_noaa(path: Union[str, Path], key: str) -> Tuple[np.ndarray, np.ndarray]:
     """A single quantity from the NOAA SWPC solar-cycle indices JSON.
 
     Missing values appear as a nominal ``-1.0``. Note this is not the same as
@@ -219,7 +221,7 @@ def parse_noaa(path, key):
     return np.asarray(mjd, dtype=float)[order], np.asarray(value, dtype=float)[order]
 
 
-def parse_noaa_ssn(path):
+def parse_noaa_ssn(path: Union[str, Path]) -> Tuple[np.ndarray, np.ndarray]:
     """Monthly international sunspot number from the NOAA SWPC JSON.
 
     Unlike F10.7 in the same file, this runs the full record from 1749-01.
@@ -227,7 +229,7 @@ def parse_noaa_ssn(path):
     return parse_noaa(path, "ssn")
 
 
-def parse_ace_density(path):
+def parse_ace_density(path: Union[str, Path]) -> Tuple[np.ndarray, np.ndarray]:
     """Solar wind proton density from an ACE Science Center level-2 export.
 
     Reads the whitespace-delimited text the ASC data retrieval form produces,
@@ -293,10 +295,37 @@ def parse_ace_density(path):
 
 # Sources
 
-Source = namedtuple(
-    "Source",
-    ["filename", "url_base", "update_interval_days", "parser", "units", "description"],
-)
+
+class Source(NamedTuple):
+    """Where one series comes from and how to read it.
+
+    Attributes
+    ----------
+    filename : str
+        Name of the upstream file, also the name looked for under
+        ``$PINT_SOLAR_INDICES``.
+    url_base : str or None
+        Directory URL the file is fetched from, or None when there is no
+        automatic download, as for ``ace_density``.
+    update_interval_days : float or None
+        How long a cached copy stays fresh, passed to
+        :func:`pint.observatory.global_clock_corrections.get_file`.
+    parser : callable
+        Reads the file and returns ``(mjd, value)``.
+    units : str
+        Units of *value*, for the record. Empty for a dimensionless series
+        such as the sunspot number.
+    description : str
+        One line naming the quantity and its provider.
+    """
+
+    filename: str
+    url_base: Optional[str]
+    update_interval_days: Optional[float]
+    parser: Callable[..., Tuple[np.ndarray, np.ndarray]]
+    units: str
+    description: str
+
 
 SOURCES = {
     "f107": Source(
@@ -326,7 +355,7 @@ SOURCES = {
 }
 
 
-def local_candidate(filename):
+def local_candidate(filename: str) -> Optional[Path]:
     """The copy of *filename* under ``$PINT_SOLAR_INDICES``, if there is one."""
     if pint_solar_env_var not in os.environ:
         return None
@@ -334,7 +363,14 @@ def local_candidate(filename):
     return p if p.exists() else None
 
 
-def get_series(name="f107", download_policy="if_expired", path=None, **parser_kwargs):
+def get_series(
+    name: str = "f107",
+    download_policy: Literal[
+        "always", "never", "if_expired", "if_missing"
+    ] = "if_expired",
+    path: Optional[Union[str, Path]] = None,
+    **parser_kwargs,
+) -> Tuple[np.ndarray, np.ndarray]:
     """Return a solar activity time series as ``(mjd, value)``.
 
     Parameters
@@ -403,7 +439,12 @@ def get_series(name="f107", download_policy="if_expired", path=None, **parser_kw
     )
 
 
-def check_coverage(mjd, toas_mjd, name="solar index", tolerance_days=0.0):
+def check_coverage(
+    mjd: Union[np.ndarray, List[float]],
+    toas_mjd: Union[np.ndarray, List[float]],
+    name: str = "solar index",
+    tolerance_days: float = 0.0,
+) -> Tuple[int, int]:
     """Warn when a series does not span the epochs it will be evaluated at.
 
     A covariate that stops short is held at its endpoint value, which models the

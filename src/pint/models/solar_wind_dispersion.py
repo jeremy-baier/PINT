@@ -1,5 +1,7 @@
 """Dispersion due to the solar wind."""
 
+from pathlib import Path
+from typing import List, Literal, Optional, Tuple, Union
 from warnings import warn
 
 from loguru import logger as log
@@ -21,10 +23,12 @@ from pint.models.parameter import (
     prefixParameter,
     strParameter,
 )
+from pint.models.timing_model import TimingModel
+from pint.toa import TOAs
 from pint.toa_select import TOASelect
 
 
-def _dm_p_int(b, z, p):
+def _dm_p_int(b: u.Quantity, z: u.Quantity, p: float) -> u.Quantity:
     """Integral function for DM calculation
     from https://github.com/nanograv/enterprise_extensions/blob/master/enterprise_extensions/chromatic/solar_wind.py#L299
 
@@ -48,7 +52,7 @@ def _dm_p_int(b, z, p):
     )
 
 
-def _gamma_function(p):
+def _gamma_function(p: float) -> float:
     """The second term in Eqn. 12 of Hazboun et al. involving Gamma functions
     Note that this needs to be multiplied by b*sqrt(pi)/2
 
@@ -64,7 +68,7 @@ def _gamma_function(p):
     return scipy.special.gamma(p / 2 - 0.5) / scipy.special.gamma(p / 2)
 
 
-def _d_gamma_function_dp(p):
+def _d_gamma_function_dp(p: float) -> float:
     """Derivative of the second term in Eqn. 12 of Hazboun et al. involving Gamma functions wrt p
     Note that this needs to be multiplied by b*sqrt(pi)/2
 
@@ -88,7 +92,7 @@ def _d_gamma_function_dp(p):
     )
 
 
-def _hypergeom_function(b, z, p):
+def _hypergeom_function(b: u.Quantity, z: u.Quantity, p: float) -> u.Quantity:
     """The first term in Eqn. 12 of Hazboun et al. involving hypergeometric functions
     Note that this needs to be multiplied by b
 
@@ -111,7 +115,7 @@ def _hypergeom_function(b, z, p):
     )
 
 
-def _d_hypergeom_function_dp(b, z, p):
+def _d_hypergeom_function_dp(b: u.Quantity, z: u.Quantity, p: float) -> u.Quantity:
     """Derivative of the first term in Eqn. 12 of Hazboun et al. involving hypergeometric functions wrt p
     Note that this needs to be multiplied by b
 
@@ -171,7 +175,7 @@ def _d_hypergeom_function_dp(b, z, p):
     )
 
 
-def _solar_wind_geometry(r, theta, p):
+def _solar_wind_geometry(r: u.Quantity, theta: u.Quantity, p: float) -> u.Quantity:
     """Solar wind geometry factor (integral of path length)
 
     For the models with variable power-law index (You et al., Hazboun et al.)
@@ -209,7 +213,9 @@ def _solar_wind_geometry(r, theta, p):
     return solar_wind_geometry
 
 
-def _d_solar_wind_geometry_d_p(r, theta, p):
+def _d_solar_wind_geometry_d_p(
+    r: u.Quantity, theta: u.Quantity, p: float
+) -> u.Quantity:
     """Derivative of solar_wind_geometry (path length) wrt power-law index p
 
     The evaluation is done using Eqn. 12 in Hazboun et al. (2022).  The first term
@@ -239,10 +245,10 @@ def _d_solar_wind_geometry_d_p(r, theta, p):
 
 
 def _get_reference_time(
-    model,
-    params=["POSEPOCH", "PEPOCH", "DMEPOCH"],
-    default=astropy.time.Time(50000, format="mjd"),
-):
+    model: TimingModel,
+    params: List[str] = ["POSEPOCH", "PEPOCH", "DMEPOCH"],
+    default: astropy.time.Time = astropy.time.Time(50000, format="mjd"),
+) -> astropy.time.Time:
     """Return a reference time for other calculations
 
     Go through a list of possible times in a model, and return the first one that is not None.
@@ -350,7 +356,7 @@ class SolarWindDispersion(SolarWindDispersionBase):
         self.delay_funcs_component += [self.solar_wind_delay]
         self.set_special_params(["NE_SW", "SWM", "SWP"])
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
 
         self.register_dm_deriv_funcs(self.d_dm_d_swp, "SWP")
@@ -364,13 +370,13 @@ class SolarWindDispersion(SolarWindDispersionBase):
             self.register_deriv_funcs(self.d_delay_d_ne_sw, nesw_name)
             self.register_dm_deriv_funcs(self.d_dm_d_ne_sw, nesw_name)
 
-    def NE_SW_derivative_unit(self, n):
+    def NE_SW_derivative_unit(self, n: int) -> str:
         return f"cm^-3/yr^{n}" if n != 0 else "cm^-3"
 
-    def NE_SW_derivative_description(self, n):
+    def NE_SW_derivative_description(self, n: int) -> str:
         return f"{n}'th time derivative of the Solar Wind density at 1 AU"
 
-    def solar_wind_geometry(self, toas):
+    def solar_wind_geometry(self, toas: TOAs) -> u.Quantity:
         """Return the geometry of solar wind dispersion.
 
         For SWM==0:
@@ -408,7 +414,7 @@ class SolarWindDispersion(SolarWindDispersionBase):
                 "Solar Dispersion Delay not implemented for SWM %d" % swm
             )
 
-    def solar_wind_dm(self, toas):
+    def solar_wind_dm(self, toas: TOAs) -> u.Quantity:
         """Return the solar wind dispersion measure.
 
         SWM==0:
@@ -451,17 +457,24 @@ class SolarWindDispersion(SolarWindDispersionBase):
         solar_wind_dm = ne_sw * solar_wind_geometry
         return solar_wind_dm.to(u.pc / u.cm**3)
 
-    def solar_wind_delay(self, toas, acc_delay=None):
+    def solar_wind_delay(
+        self, toas: TOAs, acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None
+    ) -> u.Quantity:
         """This is a wrapper function to compute solar wind dispersion delay."""
         return self.dispersion_type_delay(toas)
 
-    def get_NE_SW_terms(self):
+    def get_NE_SW_terms(self) -> List[u.Quantity]:
         """Return a list of the NE_SW term values in the model: [NE_SW, NE_SW1, ..., NE_SWn]"""
         return [self.NE_SW.quantity] + self._parent.get_prefix_list(
             "NE_SW", start_index=1
         )
 
-    def d_dm_d_ne_sw(self, toas, param_name, acc_delay=None):
+    def d_dm_d_ne_sw(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         """Derivative of of DM wrt the solar wind ne amplitude."""
         if self.SWM.value in [0, 1]:
             solar_wind_geometry = self.solar_wind_geometry(toas)
@@ -492,10 +505,20 @@ class SolarWindDispersion(SolarWindDispersionBase):
             u.pc / u.cm**3 / par.units
         )
 
-    def d_delay_d_ne_sw(self, toas, param_name, acc_delay=None):
+    def d_delay_d_ne_sw(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         return self.d_delay_d_dmparam(toas, param_name)
 
-    def d_solar_wind_geometry_d_swp(self, toas, param_name, acc_delay=None):
+    def d_solar_wind_geometry_d_swp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         """Derivative of solar_wind_geometry (path length) wrt power-law index p
 
         The evaluation is done using Eqn. 12 in Hazboun et al. (2022).  The first term
@@ -518,13 +541,23 @@ class SolarWindDispersion(SolarWindDispersionBase):
                 "Solar Dispersion Delay not implemented for SWM %d" % self.SWM.value
             )
 
-    def d_dm_d_swp(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         d_geometry_dp = self.d_solar_wind_geometry_d_swp(
             toas, param_name, acc_delay=acc_delay
         )
         return self.NE_SW.quantity * d_geometry_dp
 
-    def d_delay_d_swp(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         try:
             bfreq = self._parent.barycentric_radio_freq(toas)
         except AttributeError:
@@ -534,7 +567,7 @@ class SolarWindDispersion(SolarWindDispersionBase):
         deriv[bfreq < 1.0 * u.MHz] = 0.0
         return deriv
 
-    def print_par(self, format="pint"):
+    def print_par(self, format: Literal["tempo", "tempo2", "pint"] = "pint") -> str:
         result = ""
         for par in self.params:
             if par == "SWP" and self.SWM.value != 1:
@@ -544,7 +577,7 @@ class SolarWindDispersion(SolarWindDispersionBase):
 
         return result
 
-    def get_max_dm(self):
+    def get_max_dm(self) -> u.Quantity:
         """Return approximate maximum DM from the Solar Wind (at conjunction)
 
         Simplified model that assumes a circular orbit
@@ -575,7 +608,7 @@ class SolarWindDispersion(SolarWindDispersionBase):
                 "Solar Dispersion Delay not implemented for SWM %d" % self.SWM.value
             )
 
-    def get_min_dm(self):
+    def get_min_dm(self) -> u.Quantity:
         """Return approximate minimum DM from the Solar Wind (180deg away from conjunction)
 
         Simplified model that assumes a circular orbit
@@ -664,7 +697,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         self.delay_funcs_component += [self.swx_delay]
         self._theta0 = None
 
-    def solar_wind_geometry(self, toas, p):
+    def solar_wind_geometry(self, toas: TOAs, p: float) -> u.Quantity:
         """Return the geometry of solar wind dispersion (integrated path-length)
 
         Implements Eqn. 11 of Hazboun et al. (2022)
@@ -684,7 +717,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         theta, r = self._parent.sun_angle(toas, also_distance=True)
         return _solar_wind_geometry(r, theta, p).to(u.pc)
 
-    def conjunction_solar_wind_geometry(self, p):
+    def conjunction_solar_wind_geometry(self, p: float) -> u.Quantity:
         """Return the geometry (integrated path-length) of solar wind dispersion at conjunction
 
         Implements Eqn. 11 of Hazboun et al. (2022)
@@ -701,7 +734,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         r0 = 1 * u.AU
         return _solar_wind_geometry(r0, self.theta0, p).to(u.pc)
 
-    def opposition_solar_wind_geometry(self, p):
+    def opposition_solar_wind_geometry(self, p: float) -> u.Quantity:
         """Return the geometry (integrated path-length) of solar wind dispersion at opposition
 
         Implements Eqn. 11 of Hazboun et al. (2022)
@@ -718,7 +751,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         r0 = 1 * u.AU
         return _solar_wind_geometry(r0, 180 * u.deg - self.theta0, p).to(u.pc)
 
-    def d_solar_wind_geometry_d_swxp(self, toas, p):
+    def d_solar_wind_geometry_d_swxp(self, toas: TOAs, p: float) -> u.Quantity:
         """Derivative of solar_wind_geometry (path length) wrt power-law index p
 
         The evaluation is done using Eqn. 12 in Hazboun et al. (2022).  The first term
@@ -741,7 +774,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         theta, r = self._parent.sun_angle(toas, also_distance=True)
         return _d_solar_wind_geometry_d_p(r, theta, p)
 
-    def d_conjunction_solar_wind_geometry_d_swxp(self, p):
+    def d_conjunction_solar_wind_geometry_d_swxp(self, p: float) -> u.Quantity:
         """Derivative of conjunction_solar_wind_geometry (path length) wrt power-law index p
 
         The evaluation is done using Eqn. 12 in Hazboun et al. (2022).  The first term
@@ -755,7 +788,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         r0 = 1 * u.AU
         return _d_solar_wind_geometry_d_p(r0, self.theta0, p)
 
-    def d_opposition_solar_wind_geometry_d_swxp(self, p):
+    def d_opposition_solar_wind_geometry_d_swxp(self, p: float) -> u.Quantity:
         """Derivative of opposition_solar_wind_geometry (path length) wrt power-law index p
 
         The evaluation is done using Eqn. 12 in Hazboun et al. (2022).  The first term
@@ -770,8 +803,14 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         return _d_solar_wind_geometry_d_p(r0, 180 * u.deg - self.theta0, p)
 
     def add_swx_range(
-        self, mjd_start, mjd_end, index=None, swxdm=0, swxp=2, frozen=True
-    ):
+        self,
+        mjd_start: Union[float, u.Quantity, astropy.time.Time],
+        mjd_end: Union[float, u.Quantity, astropy.time.Time],
+        index: Optional[int] = None,
+        swxdm: Union[float, u.Quantity] = 0,
+        swxp: Union[float, u.Quantity] = 2,
+        frozen: bool = True,
+    ) -> int:
         """Add SWX range to a dispersion model with specified start/end MJD, SWXDM, and power-law index
 
         Parameters
@@ -871,7 +910,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         self.validate()
         return index
 
-    def remove_swx_range(self, index):
+    def remove_swx_range(self, index: Union[float, int, List[int], np.ndarray]) -> None:
         """Removes all SWX parameters associated with a given index/list of indices.
 
         Parameters
@@ -895,7 +934,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
                 self.remove_param(prefix + index_rf)
         self.validate()
 
-    def get_indices(self):
+    def get_indices(self) -> np.ndarray:
         """Returns an array of integers corresponding to SWX parameters.
 
         Returns
@@ -906,7 +945,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         inds = [int(p.split("_")[-1]) for p in self.params if "SWXDM_" in p]
         return np.array(inds)
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
         # Get SWX mapping.
         # Register the SWX derivatives
@@ -930,7 +969,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
                 self.register_deriv_funcs(self.d_delay_d_swxp, prefix_par)
                 self.register_dm_deriv_funcs(self.d_dm_d_swxp, prefix_par)
 
-    def validate(self):
+    def validate(self) -> None:
         """Validate the SWX parameters."""
         super().validate()
         SWXDM_mapping = self.get_prefix_mapping_component("SWXDM_")
@@ -958,7 +997,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
                 "Please check your prefixed parameters."
             )
 
-    def get_theta0(self):
+    def get_theta0(self) -> u.Quantity:
         """Get elongation at conjunction
 
         Returns
@@ -972,12 +1011,12 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         self._theta0 = elongation
 
     @property
-    def theta0(self):
+    def theta0(self) -> u.Quantity:
         if self._theta0 is None:
             self.get_theta0()
         return self._theta0
 
-    def validate_toas(self, toas):
+    def validate_toas(self, toas: TOAs) -> None:
         SWXDM_mapping = self.get_prefix_mapping_component("SWXDM_")
         SWXP_mapping = self.get_prefix_mapping_component("SWXP_")
         SWXR1_mapping = self.get_prefix_mapping_component("SWXR1_")
@@ -995,7 +1034,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         if bad_parameters:
             raise MissingTOAs(bad_parameters)
 
-    def swx_dm(self, toas):
+    def swx_dm(self, toas: TOAs) -> u.Quantity:
         """Return solar wind Delta DM for given TOAs"""
         condition = {}
         p = {}
@@ -1034,11 +1073,18 @@ class SolarWindDispersionX(SolarWindDispersionBase):
                 ).to(u.pc / u.cm**3)
         return dm
 
-    def swx_delay(self, toas, acc_delay=None):
+    def swx_delay(
+        self, toas: TOAs, acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None
+    ) -> u.Quantity:
         """This is a wrapper function for interacting with the TimingModel class"""
         return self.dispersion_type_delay(toas)
 
-    def d_dm_d_swxdm(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swxdm(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         condition = {}
         tbl = toas.table
         if not hasattr(self, "swx_toas_selector"):
@@ -1067,7 +1113,12 @@ class SolarWindDispersionX(SolarWindDispersionBase):
                 )
         return deriv
 
-    def d_delay_d_swxdm(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swxdm(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         try:
             bfreq = self._parent.barycentric_radio_freq(toas)
         except AttributeError:
@@ -1077,7 +1128,12 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         deriv[bfreq < 1.0 * u.MHz] = 0.0
         return deriv
 
-    def d_dm_d_swxp(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swxp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         condition = {}
         tbl = toas.table
         # still use the SWX selectors
@@ -1122,7 +1178,12 @@ class SolarWindDispersionX(SolarWindDispersionBase):
                 )
         return deriv
 
-    def d_delay_d_swxp(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swxp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         try:
             bfreq = self._parent.barycentric_radio_freq(toas)
         except AttributeError:
@@ -1132,7 +1193,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
         deriv[bfreq < 1.0 * u.MHz] = 0.0
         return deriv
 
-    def print_par(self, format="pint"):
+    def print_par(self, format: Literal["tempo", "tempo2", "pint"] = "pint") -> str:
         result = ""
         SWXDM_mapping = self.get_prefix_mapping_component("SWXDM_")
         SWXP_mapping = self.get_prefix_mapping_component("SWXP_")
@@ -1146,7 +1207,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
             result += getattr(self, SWXR2_mapping[ii]).as_parfile_line(format=format)
         return result
 
-    def get_swscalings(self):
+    def get_swscalings(self) -> np.ndarray:
         """Return the approximate scaling between the SWX model and the standard model
 
         Returns
@@ -1165,7 +1226,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
             ) / self.conjunction_solar_wind_geometry(p)
         return scalings
 
-    def get_max_dms(self):
+    def get_max_dms(self) -> u.Quantity:
         """Return approximate maximum DMs for each segment from the Solar Wind (at conjunction)
 
         Simplified model that assumes a circular orbit
@@ -1182,7 +1243,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
             dms[j] = (swxdm).to(u.pc / u.cm**3)
         return dms
 
-    def get_min_dms(self):
+    def get_min_dms(self) -> u.Quantity:
         """Return approximate minimum DMs for each segment from the Solar Wind (at opposition).
 
         Simplified model that assumes a circular orbit
@@ -1207,7 +1268,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
             ).to(u.pc / u.cm**3)
         return dms
 
-    def get_ne_sws(self):
+    def get_ne_sws(self) -> u.Quantity:
         """Return Solar Wind electron densities at 1 AU for each segment
 
         Simplified model that assumes a circular orbit
@@ -1226,7 +1287,7 @@ class SolarWindDispersionX(SolarWindDispersionBase):
             ne_sws[j] = (swxdm / self.conjunction_solar_wind_geometry(p)).to(u.cm**-3)
         return ne_sws
 
-    def set_ne_sws(self, ne_sws):
+    def set_ne_sws(self, ne_sws: u.Quantity) -> None:
         """Set the DMMAXs based on an input NE_SW values (electron density at 1 AU)
 
         Parameters
@@ -1443,7 +1504,12 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
     # ── proxy data ────────────────────────────────────────────────────────────
 
-    def set_proxy(self, proxy_mjd, proxy_vals, ephemeral=True):
+    def set_proxy(
+        self,
+        proxy_mjd: Union[np.ndarray, List[float]],
+        proxy_vals: Union[np.ndarray, List[float]],
+        ephemeral: bool = True,
+    ) -> None:
         """Load a proxy time series from arrays held in memory.
 
         .. warning::
@@ -1500,7 +1566,13 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 "to a named series or pin a file with $PINT_SOLAR_INDICES."
             )
 
-    def load_proxy_from_source(self, download_policy="if_expired", path=None):
+    def load_proxy_from_source(
+        self,
+        download_policy: Literal[
+            "always", "never", "if_expired", "if_missing"
+        ] = "if_expired",
+        path: Optional[Union[str, Path]] = None,
+    ) -> None:
         """Load the series named by ``SWPRSOURCE`` via :mod:`pint.solar_indices`.
 
         Unlike :meth:`set_proxy`, this leaves the model serialisable, because
@@ -1524,7 +1596,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         self.set_proxy(mjd, vals, ephemeral=path is not None)
         log.info(f"Loaded {len(mjd)} samples of solar index {name!r}")
 
-    def smoothed_proxy(self):
+    def smoothed_proxy(self) -> Tuple[np.ndarray, np.ndarray]:
         """Return (mjd, vals) for the proxy with ``SWPRSMOOTH`` applied.
 
         The smoothing width is in days, converted to samples using the median cadence
@@ -1565,7 +1637,9 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         self.proxy_smoothed_cache = (width, vals)
         return self.proxy_mjd, vals
 
-    def get_proxy_at_toas(self, toas, lag_days=None):
+    def get_proxy_at_toas(
+        self, toas: TOAs, lag_days: Optional[float] = None
+    ) -> np.ndarray:
         """The proxy ``P(t - lag)`` at the TOA epochs, in its own units.
 
         Parameters
@@ -1595,17 +1669,17 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
         return np.interp(shifted, mjd, vals, left=vals[0], right=vals[-1])
 
-    def proxy_ne(self, toas):
+    def proxy_ne(self, toas: TOAs) -> u.Quantity:
         """The proxy contribution to n_E [cm^-3], ``SWPRBETA1 * P(t - SWPRLAG)``."""
         return self.SWPRBETA1.quantity * self.get_proxy_at_toas(toas)
 
-    def total_ne(self, toas):
+    def total_ne(self, toas: TOAs) -> u.Quantity:
         """The full modelled density ``SWPRBETA0 + SWPRBETA1 * P(t)`` [cm^-3]."""
         return self.SWPRBETA0.quantity * np.ones(len(toas)) + self.proxy_ne(toas)
 
     # ── model ─────────────────────────────────────────────────────────────────
 
-    def solar_wind_geometry(self, toas):
+    def solar_wind_geometry(self, toas: TOAs) -> u.Quantity:
         """Return the geometry of solar wind dispersion.
 
         Identical to :meth:`SolarWindDispersion.solar_wind_geometry`: for ``SWM==0``
@@ -1639,7 +1713,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 "Solar Dispersion Delay not implemented for SWM %d" % swm
             )
 
-    def solar_wind_dm(self, toas):
+    def solar_wind_dm(self, toas: TOAs) -> u.Quantity:
         r"""Return the solar-wind DM [pc cm^-3] from the proxy regression.
 
         .. math::
@@ -1657,11 +1731,13 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
         return (self.total_ne(toas) * self.solar_wind_geometry(toas)).to(u.pc / u.cm**3)
 
-    def solar_wind_delay(self, toas, acc_delay=None):
+    def solar_wind_delay(
+        self, toas: TOAs, acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None
+    ) -> u.Quantity:
         """This is a wrapper function to compute solar wind dispersion delay."""
         return self.dispersion_type_delay(toas)
 
-    def get_mean_ne(self, toas):
+    def get_mean_ne(self, toas: TOAs) -> u.Quantity:
         r"""Mean electron density at 1 AU over the TOAs [cm^-3].
 
         .. math::
@@ -1682,24 +1758,49 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
     # ── derivatives ───────────────────────────────────────────────────────────
 
-    def d_dm_d_swprbeta0(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swprbeta0(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         """dDM/dSWPRBETA0 = S(t)."""
         par = getattr(self, param_name)
         return self.solar_wind_geometry(toas).to(u.pc / u.cm**3 / par.units)
 
-    def d_delay_d_swprbeta0(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swprbeta0(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         return self.d_delay_d_dmparam(toas, param_name)
 
-    def d_dm_d_swprbeta1(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swprbeta1(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         """dDM/dSWPRBETA1 = P(t - SWPRLAG) * S(t)."""
         par = getattr(self, param_name)
         p_toas = self.get_proxy_at_toas(toas)
         return (self.solar_wind_geometry(toas) * p_toas).to(u.pc / u.cm**3 / par.units)
 
-    def d_delay_d_swprbeta1(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swprbeta1(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         return self.d_delay_d_dmparam(toas, param_name)
 
-    def d_dm_d_swprlag(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swprlag(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         r"""dDM/dSWPRLAG by central finite differences.
 
         .. math::
@@ -1722,10 +1823,20 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             self.SWPRBETA1.quantity * dp_dlag / u.day * self.solar_wind_geometry(toas)
         ).to(u.pc / u.cm**3 / par.units)
 
-    def d_delay_d_swprlag(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swprlag(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         return self.d_delay_d_dmparam(toas, param_name)
 
-    def d_solar_wind_geometry_d_swp(self, toas, param_name, acc_delay=None):
+    def d_solar_wind_geometry_d_swp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         """Derivative of the path length wrt the power-law index p.
 
         Eqn. 12 of Hazboun et al. (2022), as in
@@ -1743,19 +1854,29 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 "Solar Dispersion Delay not implemented for SWM %d" % self.SWM.value
             )
 
-    def d_dm_d_swp(self, toas, param_name, acc_delay=None):
+    def d_dm_d_swp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         """dDM/dSWP = n_E(t) * dS(t)/dSWP, with n_E the full regression."""
         d_geom_dp = self.d_solar_wind_geometry_d_swp(
             toas, param_name, acc_delay=acc_delay
         )
         return (self.total_ne(toas) * d_geom_dp).to(u.pc / u.cm**3)
 
-    def d_delay_d_swp(self, toas, param_name, acc_delay=None):
+    def d_delay_d_swp(
+        self,
+        toas: TOAs,
+        param_name: str,
+        acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
+    ) -> u.Quantity:
         return self.d_delay_d_dmparam(toas, param_name)
 
     # ── bookkeeping ───────────────────────────────────────────────────────────
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
 
         self.register_dm_deriv_funcs(self.d_dm_d_swprbeta0, "SWPRBETA0")
@@ -1767,7 +1888,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         self.register_dm_deriv_funcs(self.d_dm_d_swp, "SWP")
         self.register_deriv_funcs(self.d_delay_d_swp, "SWP")
 
-    def validate(self):
+    def validate(self) -> None:
         super().validate()
 
         if self.SWM.value not in [0, 1]:
@@ -1782,7 +1903,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 f"known: {sorted(SOURCES)}"
             )
 
-    def print_par(self, format="pint"):
+    def print_par(self, format: Literal["tempo", "tempo2", "pint"] = "pint") -> str:
         if self.proxy_is_ephemeral:
             warn(
                 "This model's proxy was supplied as arrays through set_proxy(), "
