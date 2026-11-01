@@ -322,11 +322,12 @@ print(
 # | `ssn` | international sunspot number, [NOAA SWPC](https://services.swpc.noaa.gov/json/solar-cycle/) | monthly |
 # | `ace_density` | in-situ proton density, [ACE SWEPAM](https://izw1.caltech.edu/ACE/ASC/level2/) | daily, manual export |
 #
-# Resolution goes through three tiers, the same way clock files do: an explicit `path=` or
-# a directory in `$PINT_SOLAR_INDICES`, then the cached download, and finally a bundled
-# fallback.
-# The first tier is what pins an analysis, since the content at a fixed URL changes as new
-# data arrive. Downloading, caching, expiration and failure handling are all done through
+# Resolution goes through two tiers, the same way clock files do: an explicit `path=` or a
+# directory in `$PINT_SOLAR_INDICES`, then the cached download. The first tier is what
+# pins an analysis, since the content at a fixed URL changes as new data arrive. Nothing
+# is bundled with PINT, since a snapshot of a product that grows every month is stale the
+# day it ships; when neither tier can supply a series, `set_proxy` below takes the arrays
+# directly, at the cost of a par file that no longer determines the model. Downloading, caching, expiration and failure handling are all done through
 # `pint.observatory.global_clock_corrections.get_file`, so `download_policy="never"` is
 # offline and deterministic, and a network error during a long run warns and falls back to
 # the cached copy rather than raising an error.
