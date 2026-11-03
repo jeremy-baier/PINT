@@ -9,16 +9,14 @@ import os
 import warnings
 from pathlib import Path
 
+import astropy.units as u
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
 from pint import solar_indices as si
+from pint.utils import compute_hash
 
-
-# ---------------------------------------------------------------------------
-# fixtures: miniature versions of each upstream format
-# ---------------------------------------------------------------------------
 
 DRAO_TEXT = """fluxdate    fluxtime    fluxjulian    fluxcarrington  fluxobsflux  fluxadjflux  fluxursi
 ----------  ----------  ------------  --------------  -----------  -----------  ----------
@@ -64,9 +62,7 @@ def ace(tmp_path):
     return p
 
 
-# ---------------------------------------------------------------------------
 # epoch conventions
-# ---------------------------------------------------------------------------
 
 
 def test_mjd_conventions():
@@ -114,18 +110,17 @@ def test_monthly_cadence_survives_the_exact_epochs():
     assert spacing.min() >= 29.5 and spacing.max() <= 31.0
 
 
-# ---------------------------------------------------------------------------
 # DRAO
-# ---------------------------------------------------------------------------
 
 
 def test_drao_averages_to_one_value_per_day(drao):
     """Three measurements a day collapse to one daily mean."""
-    mjd, flux = si.parse_drao_f107(drao)
-    assert len(mjd) == 2
-    assert_allclose(mjd, [53306, 53307])
-    assert_allclose(flux[0], np.mean([130.9, 134.0, 132.2]))
-    assert_allclose(flux[1], np.mean([138.0, 140.0]))
+    series = si.parse_drao_f107(drao)
+    assert len(series) == 2
+    assert_allclose(series.mjd, [53306, 53307])
+    assert_allclose(series.values.value[0], np.mean([130.9, 134.0, 132.2]))
+    assert_allclose(series.values.value[1], np.mean([138.0, 140.0]))
+    assert series.unit == si.sfu
 
 
 def test_drao_defaults_to_the_1au_adjusted_column(drao):
@@ -137,8 +132,8 @@ def test_drao_defaults_to_the_1au_adjusted_column(drao):
     the fit and wrong. Asserting the two columns give different numbers is what
     stops a silent swap.
     """
-    _, adj = si.parse_drao_f107(drao)
-    _, obs = si.parse_drao_f107(drao, column="fluxobsflux")
+    adj = si.parse_drao_f107(drao).values.value
+    obs = si.parse_drao_f107(drao, column="fluxobsflux").values.value
     assert not np.allclose(adj, obs)
     assert_allclose(adj[0], np.mean([130.9, 134.0, 132.2]))
     assert_allclose(obs[0], np.mean([132.7, 135.8, 134.0]))
@@ -156,9 +151,7 @@ def test_drao_rejects_a_file_without_the_header(tmp_path):
         si.parse_drao_f107(p)
 
 
-# ---------------------------------------------------------------------------
 # NOAA
-# ---------------------------------------------------------------------------
 
 
 def test_noaa_ssn_keeps_genuine_zeros(noaa):
@@ -169,11 +162,13 @@ def test_noaa_ssn_keeps_genuine_zeros(noaa):
     flux, silently discards them. The filter has to be per quantity: -1.0 is
     missing, 0.0 is a measurement.
     """
-    mjd, ssn = si.parse_noaa_ssn(noaa)
-    assert len(ssn) == 4  # every row survives, including the 0.0
-    assert 0.0 in ssn
+    series = si.parse_noaa_ssn(noaa)
+    assert len(series) == 4  # every row survives, including the 0.0
+    assert 0.0 in series.values.value
+    # a count is dimensionless, unlike the flux series
+    assert series.unit == u.dimensionless_unscaled
     # the -1.0 sentinel on a different key in the same rows is what gets dropped
-    assert len(si.parse_noaa(noaa, "smoothed_ssn")[1]) == 3
+    assert len(si.parse_noaa(noaa, "smoothed_ssn")) == 3
 
 
 def test_no_noaa_f107_source():
@@ -189,20 +184,18 @@ def test_no_noaa_f107_source():
 
 
 def test_noaa_series_are_sorted(noaa):
-    mjd, _ = si.parse_noaa_ssn(noaa)
-    assert np.all(np.diff(mjd) > 0)
+    assert np.all(np.diff(si.parse_noaa_ssn(noaa).mjd) > 0)
 
 
-# ---------------------------------------------------------------------------
 # ACE
-# ---------------------------------------------------------------------------
 
 
 def test_ace_drops_the_missing_sentinel(ace):
-    mjd, density = si.parse_ace_density(ace)
-    assert len(density) == 2
-    assert_allclose(density, [7.35, 5.12])
-    assert_allclose(mjd[0], si.ACE_EPOCH_MJD + 65145600.0 / 86400.0)
+    series = si.parse_ace_density(ace)
+    assert len(series) == 2
+    assert_allclose(series.values.value, [7.35, 5.12])
+    assert series.unit == u.cm**-3
+    assert_allclose(series.mjd[0], si.ACE_EPOCH_MJD + 65145600.0 / 86400.0)
 
 
 def test_ace_rejects_a_file_without_density(tmp_path):
@@ -212,21 +205,21 @@ def test_ace_rejects_a_file_without_density(tmp_path):
         si.parse_ace_density(p)
 
 
-# ---------------------------------------------------------------------------
 # resolution
-# ---------------------------------------------------------------------------
 
 
 def test_get_series_with_an_explicit_path(drao):
-    mjd, flux = si.get_series("f107", path=drao)
-    assert len(mjd) == 2
+    series = si.get_series("f107", path=drao)
+    assert len(series) == 2
+    assert series.name == "f107"
+    assert series.filename == str(drao)
 
 
 def test_get_series_honours_the_env_override(drao, monkeypatch):
     """$PINT_SOLAR_INDICES wins over the network, which is what pins an analysis."""
     monkeypatch.setenv(si.pint_solar_env_var, str(drao.parent))
-    mjd, flux = si.get_series("f107", download_policy="never")
-    assert_allclose(mjd, [53306, 53307])
+    series = si.get_series("f107", download_policy="never")
+    assert_allclose(series.mjd, [53306, 53307])
 
 
 def test_get_series_rejects_an_unknown_name():
@@ -245,9 +238,147 @@ def test_ace_has_no_automatic_download():
         si.get_series("ace_density", download_policy="never")
 
 
-# ---------------------------------------------------------------------------
+# the series object
+
+
+def test_series_carries_its_unit_rather_than_a_convention(drao):
+    """Units travel with the data instead of being described in a docstring.
+
+    The whole point of returning an object: a caller cannot pick up the values
+    without also picking up what they are measured in.
+    """
+    series = si.parse_drao_f107(drao)
+    assert isinstance(series.values, u.Quantity)
+    assert series.unit == si.sfu
+    # 1 sfu = 1e-22 W m^-2 Hz^-1 = 1e4 Jy
+    assert_allclose((1 * si.sfu).to_value(u.Jy), 1e4)
+
+
+def test_series_validates_on_construction():
+    """Length and ordering are checked up front, as ClockFile does."""
+    with pytest.raises(ValueError, match="entries but value has"):
+        si.SolarIndexSeries(np.arange(5.0), np.arange(4.0))
+    with pytest.raises(ValueError, match="out of order"):
+        si.SolarIndexSeries([2.0, 1.0], [1.0, 2.0])
+
+
+def test_series_evaluate_holds_the_endpoints_or_refuses():
+    """Out of range is a modelling choice, so the caller gets to pick."""
+    series = si.SolarIndexSeries([10.0, 20.0], [1.0, 2.0] * si.sfu, name="test")
+    assert_allclose(series.evaluate([15.0]).value, [1.5])
+    assert series.evaluate([15.0]).unit == si.sfu
+
+    with pytest.warns(UserWarning, match="does not cover every epoch"):
+        held = series.evaluate([5.0, 25.0])
+    assert_allclose(held.value, [1.0, 2.0])  # held flat, not extrapolated
+
+    with pytest.raises(ValueError, match="does not cover every epoch"):
+        series.evaluate([5.0], limits="error")
+
+
+def test_series_builds_its_time_lazily():
+    """``.time`` is deferred, and that is not just a micro-optimisation.
+
+    The sunspot record starts in 1749, where every UTC conversion draws an
+    ErfaWarning about a dubious year. Interpolation works from the MJD floats, so
+    the common path must not build a Time at all.
+    """
+    series = si.SolarIndexSeries([55000.0, 55010.0], [1.0, 2.0])
+    assert series._time is None
+    series.evaluate([55005.0])
+    assert series._time is None
+    assert series.time.isot[0].startswith("2009-06-18")  # MJD 55000
+
+
+def test_series_smoothing_is_derived_and_cadence_aware():
+    """A width in days means the same window whether sampled daily or monthly."""
+    daily = si.SolarIndexSeries(np.arange(0.0, 400.0), np.arange(400.0) * si.sfu)
+    monthly = si.SolarIndexSeries(np.arange(0.0, 400.0, 30.0), np.arange(14.0) * si.sfu)
+    assert daily.cadence_days == 1.0
+    assert monthly.cadence_days == 30.0
+
+    # the raw series is untouched; smoothing returns a new one
+    assert daily.smoothed(81).smooth_days == 81.0
+    assert daily.smooth_days == 0.0
+    assert daily.smoothed(81).unit == si.sfu
+    # narrower than one sample is a no-op rather than an error
+    assert monthly.smoothed(7) is monthly
+    assert daily.smoothed(0) is daily
+
+
+def test_series_smoothing_kernel_is_named_and_selectable():
+    """The smoothing function is a named entry in a registry, not a hidden choice."""
+    rng = np.random.default_rng(0)
+    noisy = 100.0 + rng.normal(0.0, 10.0, 401)
+    series = si.SolarIndexSeries(np.arange(401.0), noisy * si.sfu, name="synthetic")
+
+    assert set(si.SMOOTHING_KERNELS) >= {"moving_average", "gaussian"}
+    running = series.smoothed(81)
+    gaussian = series.smoothed(81, kernel="gaussian")
+
+    # the default is the moving average, and each records which one it was
+    assert running.smooth_kernel == "moving_average"
+    assert gaussian.smooth_kernel == "gaussian"
+    assert_allclose(
+        series.smoothed(81, kernel="moving_average").values.value, running.values.value
+    )
+    assert "smoothed 81 d (moving_average)" in repr(running)
+    assert "smoothed 81 d (gaussian)" in repr(gaussian)
+
+    # both suppress the noise, but they are not the same function
+    for smoothed in (running, gaussian):
+        assert smoothed.values.std() < series.values.std() / 3
+        assert_allclose(
+            smoothed.values.mean().value, series.values.mean().value, rtol=0.02
+        )
+    assert not np.allclose(running.values.value, gaussian.values.value)
+
+    with pytest.raises(ValueError, match="Unknown smoothing kernel"):
+        series.smoothed(81, kernel="lanczos")
+
+
+def test_series_moving_average_window_is_centred():
+    """An even sample count would put the smoothed series half a sample late."""
+    ramp = si.SolarIndexSeries(np.arange(201.0), np.arange(201.0) * si.sfu)
+    # a running mean of a straight line returns the line, away from the ends, only
+    # if the window is symmetric about the sample it is evaluated at
+    for width in (10, 11, 50, 81):
+        smoothed = ramp.smoothed(width)
+        interior = slice(width, -width)
+        assert_allclose(
+            smoothed.values.value[interior], ramp.values.value[interior], atol=1e-9
+        )
+
+
+def test_series_metadata_records_what_was_read(drao):
+    """A fixed URL serves changing content, so a result has to name its input."""
+    series = si.get_series("f107", path=drao)
+    prov = series.get_metadata()
+    assert prov["name"] == "f107"
+    assert prov["unit"] == "sfu"
+    assert prov["n_samples"] == 2
+    assert prov["mjd_start"] == 53306.0
+    assert prov["sha256"] == compute_hash(drao).hex()
+    assert prov["retrieved"] is not None
+    # a smoothed series says so, so it cannot be mistaken for the raw record
+    assert (prov["smooth_days"], prov["smooth_kernel"]) == (0.0, "moving_average")
+    smoothed = series.smoothed(81, kernel="gaussian").get_metadata()
+    assert (smoothed["smooth_days"], smoothed["smooth_kernel"]) == (81.0, "gaussian")
+
+
+def test_get_series_warns_when_the_unit_disagrees_with_its_source(drao, monkeypatch):
+    """A series in unexpected units silently rescales a fitted coefficient.
+
+    ``SWPRBETA1`` is per proxy unit, so swapping a series for one in different
+    units changes what the coefficient means with nothing in the par file to show
+    it. Declaring the unit in SOURCES turns that into a warning.
+    """
+    monkeypatch.setitem(si.SOURCES, "f107", si.SOURCES["f107"]._replace(unit=u.cm**-3))
+    with pytest.warns(UserWarning, match="SOURCES declares"):
+        si.get_series("f107", path=drao)
+
+
 # coverage
-# ---------------------------------------------------------------------------
 
 
 def test_check_coverage_silent_when_contained():
@@ -277,9 +408,7 @@ def test_check_coverage_handles_empty_input():
         assert si.check_coverage([1.0, 2.0], []) == (0, 0)
 
 
-# ---------------------------------------------------------------------------
 # network
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
@@ -288,10 +417,13 @@ def test_check_coverage_handles_empty_input():
 )
 @pytest.mark.parametrize("name", ["f107", "ssn"])
 def test_live_download(name):
-    mjd, value = si.get_series(name)
-    assert len(mjd) > 100
-    assert np.all(np.diff(mjd) > 0)
-    assert np.all(np.isfinite(value))
+    series = si.get_series(name)
+    assert len(series) > 100
+    assert np.all(np.diff(series.mjd) > 0)
+    assert np.all(np.isfinite(series.values.value))
+    assert series.unit == si.SOURCES[name].unit
+    # the metadata is what lets a result name exactly what it read
+    assert series.sha256 and series.retrieved is not None
     # A second call must be served from the cache with no network.
-    mjd2, value2 = si.get_series(name, download_policy="never")
-    assert_allclose(mjd, mjd2)
+    cached = si.get_series(name, download_policy="never")
+    assert_allclose(series.mjd, cached.mjd)

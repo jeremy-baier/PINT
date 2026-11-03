@@ -13,7 +13,7 @@ import numpy as np
 import scipy.special
 
 import pint.utils
-from pint import DMconst
+from pint import DMconst, solar_indices
 from pint.exceptions import MissingTOAs
 from pint.models.dispersion_model import Dispersion
 from pint.models.parameter import (
@@ -26,6 +26,7 @@ from pint.models.parameter import (
 from pint.models.timing_model import TimingModel
 from pint.toa import TOAs
 from pint.toa_select import TOASelect
+from pint.types import quantity_like
 
 
 def _dm_p_int(b: u.Quantity, z: u.Quantity, p: float) -> u.Quantity:
@@ -1334,61 +1335,30 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
         \mathrm{DM}_{\mathrm{SW}}(t) = n_E(t) \, S(t).
 
-    The proxy enters in its own units, with no scaling constant at all. The
-    coefficients therefore mean the same thing for every pulsar whatever its
-    observing span, they do not move when the proxy series is extended, and a par
-    file plus a resolvable proxy series fully determines the model.
+    The proxy enters in its own units and there is no normalization of the proxy series.
+    So for a given proxy, and the same coefficients, the n_E(t) series is the same for
+    any pulsar at any point in time.
 
-    Two earlier versions did normalise. The first scaled the proxy to zero mean and
-    unit variance using statistics computed inside :meth:`set_proxy` from whatever
-    file was passed, which recorded nothing in the par file and silently redefined
-    ``SWPRBETA1`` whenever the proxy file was updated. The second replaced that with a
-    frozen ``SWPRNORM`` constant, which fixed the span dependence but carried no
-    information: scaling ``SWPRNORM`` and ``SWPRBETA1`` together left the model
-    bit-identical, so it only set ``SWPRBETA1``'s units while adding a constant that
-    had to agree with the analysis code. It was removed on 2026-10-14.
-
-    What the proxy series *is* still matters, and no constant protects that: swapping
-    a series in sfu for one in different units rescales ``SWPRBETA1`` silently.
-
-    One proxy series
-    ----------------
-    Exactly one proxy is supported, so ``SWPRBETA0`` and ``SWPRBETA1`` are the
-    intercept and slope of a single regression and the digit in each name is the
-    order of the coefficient. An earlier version used prefix parameters indexed by
-    proxy number, which read confusingly against that convention and bought
-    flexibility nobody wanted: fitting two solar activity proxies at once is not a
-    model anyone has asked for, and two highly correlated covariates would be a poor
-    one.
-
-    No ``NE_SW``
-    ------------
-    This component does not inherit ``NE_SW``. It subclasses
-    :class:`SolarWindDispersionBase` directly and supplies the whole mean density
-    itself, with ``SWPRBETA0`` as the intercept. ``NE_SW`` means the time-averaged
-    density at 1 AU, whereas ``SWPRBETA0`` is the density at zero proxy flux, which
-    is a different quantity; naming it ``NE_SW`` in a par file would be wrong. It
-    shares ``category = "solar_wind"`` with :class:`SolarWindDispersion`, so the two
-    are mutually exclusive alternatives, as they must be: ``SWPRBETA0`` and
-    ``NE_SW`` are exactly degenerate, both constants multiplying the same geometry.
 
     Interpreting the coefficients
     -----------------------------
-    ``SWPRBETA0`` and ``SWPRBETA1`` are strongly anticorrelated, measured at -0.91 to
-    -0.94 on NANOGrav pulsars, because the normalised proxy does not have zero mean.
+    ``SWPRBETA0`` and ``SWPRBETA1`` are strongly anticorrelated so their individual
+    values can vary by a bit with only small impacts in the actual n_E(t) series.
     That is geometry rather than bias, and the derived mean density is recovered at
-    full precision. Quote :meth:`get_mean_ne` rather than either coefficient alone.
+    full precision. Plot the actual n_E(t) series or look at :meth:`get_mean_ne`
+    for a physical interpretation.
 
-    Positivity of the density is **not** enforced. It is the joint condition
-    :math:`\beta_0 + \beta_1 P(t) > 0`, which no bound on a single coefficient
-    delivers.
+    Positivity of the inferred solar wind density is **not** enforced. It is the
+    joint condition :math:`\beta_0 + \beta_1 P(t) > 0`, which means that the model
+    can be negative at times of low solar activity if the regression is poorly
+    constrained.
 
     Resolving the proxy series
     --------------------------
-    The series named by ``SWPRSOURCE`` is resolved lazily, on first evaluation, by
+    The series named by ``SWPRSOURCE`` is resolved on first evaluation, by
     :func:`pint.solar_indices.get_series`, so a bare ``get_model(par)`` gives a model
     that evaluates with no further setup. :meth:`set_proxy` overrides that with arrays
-    held in memory, at the cost of serialisability.
+    held in memory, at the cost of serializability.
 
     Parameters supported:
 
@@ -1413,8 +1383,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     def __init__(self):
         super().__init__()
 
-        # Regression intercept. Not NE_SW: this is the density at zero proxy flux,
-        # which is not the time-averaged density. See get_mean_ne() for that.
+        # Regression intercept. This is the density at zero proxy value.
         self.add_param(
             floatParameter(
                 name="SWPRBETA0",
@@ -1446,21 +1415,25 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 tcb2tdb_scale_factor=u.Quantity(1),
             )
         )
-        # Smoothing is part of the model, not a call argument: two people loading the
-        # same par file must get the same n_E(t).
         self.add_param(
             floatParameter(
                 name="SWPRSMOOTH",
                 units="day",
                 value=81.0,
-                description="Boxcar smoothing width applied to the proxy [days]; "
-                "81, three solar rotations, is the conventional F10.7A window",
+                description="Width of the smoothing applied to the proxy [days], "
+                "interpreted by SWPRSMOOTHKERNEL; 81, three solar rotations, is "
+                "the conventional F10.7A window",
                 tcb2tdb_scale_factor=u.Quantity(1),
             )
         )
-        # Names the external series, so the par file determines the model. A named
-        # source round-trips; a series handed to set_proxy() as raw arrays cannot,
-        # which is why that path warns.
+        self.add_param(
+            strParameter(
+                name="SWPRSMOOTHKERNEL",
+                value="moving_average",
+                description="Smoothing function applied to the proxy, a key of "
+                "pint.solar_indices.SMOOTHING_KERNELS (moving_average, gaussian)",
+            )
+        )
         self.add_param(
             strParameter(
                 name="SWPRSOURCE",
@@ -1491,11 +1464,10 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         # The raw series as supplied.  Smoothing is applied on demand from
         # SWPRSMOOTH and cached, so changing the parameter changes the model without
         # reloading the data.
-        self.proxy_mjd = None
-        self.proxy_vals = None
+        self.proxy_series = None
         self.proxy_smoothed_cache = None
         # True when the series came from raw arrays rather than a named source, in
-        # which case the model cannot be serialised. See set_proxy().
+        # which case the model cannot be saved to file. See set_proxy().
         self.proxy_is_ephemeral = False
 
         self.dm_value_funcs += [self.solar_wind_dm]
@@ -1504,10 +1476,29 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
     # ── proxy data ────────────────────────────────────────────────────────────
 
+    @property
+    def proxy_mjd(self) -> Optional[np.ndarray]:
+        """Epochs of the loaded proxy series as MJD, or None if none is loaded.
+
+        A view onto :attr:`proxy_series`; ``None`` is how a model built from a par
+        file reports that ``SWPRSOURCE`` has not been resolved yet.
+        """
+        return None if self.proxy_series is None else self.proxy_series.mjd
+
+    @property
+    def proxy_vals(self) -> Optional[u.Quantity]:
+        """Values of the loaded proxy series, or None if none is loaded.
+
+        The raw series, not the smoothed one: ``SWPRSMOOTH`` is applied at
+        evaluation time by :meth:`smoothed_proxy`.
+        """
+        return None if self.proxy_series is None else self.proxy_series.values
+
     def set_proxy(
         self,
         proxy_mjd: Union[np.ndarray, List[float]],
-        proxy_vals: Union[np.ndarray, List[float]],
+        proxy_vals: quantity_like,
+        unit: Optional[u.UnitBase] = None,
         ephemeral: bool = True,
     ) -> None:
         """Load a proxy time series from arrays held in memory.
@@ -1525,22 +1516,42 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
            pinned file.
 
         The series is stored raw. Smoothing is applied at evaluation time from
-        ``SWPRSMOOTH``, so the par file alone determines it and updating the series
-        cannot silently redefine ``SWPRBETA1``.
+        ``SWPRSMOOTH`` and ``SWPRSMOOTHKERNEL``, so the par file alone determines it
+        and updating the series cannot silently redefine ``SWPRBETA1``.
+
+        The unit travels with the series and is reported by
+        :meth:`~pint.solar_indices.SolarIndexSeries.get_metadata`, but it is
+        stripped again before the proxy reaches the fit, because ``SWPRBETA1`` is
+        declared in cm^-3 while it is physically cm^-3 per proxy unit and a PINT
+        parameter cannot carry a unit that depends on ``SWPRSOURCE``. See
+        :meth:`get_proxy_at_toas`. Labelling the series is therefore a check and a
+        record rather than something the arithmetic depends on, which is why a plain
+        array is still accepted.
 
         Parameters
         ----------
         proxy_mjd : array_like
             MJD of proxy sample times.
-        proxy_vals : array_like
+        proxy_vals : astropy.units.Quantity or array_like
             Proxy values, e.g. F10.7 cm flux in sfu or sunspot number.
+        unit : astropy.units.UnitBase, optional
+            The unit of *proxy_vals*. A plain array is labelled with it; a Quantity
+            is converted to it, which raises
+            :exc:`~astropy.units.UnitConversionError` if the two are incompatible
+            and so catches a mislabelled series. Defaults to the unit of
+            *proxy_vals*, or dimensionless for a plain array.
         ephemeral : bool, optional
             Whether to mark the model as non-serialisable and warn. Default True.
             :meth:`load_proxy_from_source` passes False, because there the series
             is reproducible from ``SWPRSOURCE`` alone.
         """
         proxy_mjd = np.asarray(proxy_mjd, dtype=float)
-        proxy_vals = np.asarray(proxy_vals, dtype=float)
+        had_unit = isinstance(proxy_vals, u.Quantity)
+        proxy_vals = u.Quantity(proxy_vals)
+        if unit is not None:
+            # A plain array is labelled; a Quantity is converted, which raises if the
+            # caller has labelled the series with an incompatible unit.
+            proxy_vals = proxy_vals.to(unit) if had_unit else proxy_vals.value * unit
 
         if proxy_mjd.shape != proxy_vals.shape:
             raise ValueError(
@@ -1548,22 +1559,52 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 f"{proxy_mjd.shape} and {proxy_vals.shape}."
             )
 
-        # Sort by epoch: the median cadence used for smoothing and the np.interp()
-        # in get_proxy_at_toas() both require monotonically increasing MJDs.
+        # Sort by epoch: the median cadence used for smoothing and the interpolation
+        # in SolarIndexSeries both require monotonically increasing MJDs.
         order = np.argsort(proxy_mjd)
-        self.proxy_mjd = proxy_mjd[order]
-        self.proxy_vals = proxy_vals[order]
+        self.set_proxy_series(
+            solar_indices.SolarIndexSeries(
+                proxy_mjd[order],
+                proxy_vals[order],
+                name=self.SWPRSOURCE.value,
+                description="supplied as arrays through set_proxy()",
+            ),
+            ephemeral=ephemeral,
+        )
+
+    def set_proxy_series(
+        self, series: "solar_indices.SolarIndexSeries", ephemeral: bool = True
+    ) -> None:
+        """Load a :class:`~pint.solar_indices.SolarIndexSeries` directly.
+
+        This is the form the component works in internally: the series carries its
+        own units, epochs and metadata, so nothing else has to be passed alongside
+        it. :meth:`set_proxy` wraps bare arrays into one and
+        :meth:`load_proxy_from_source` resolves one by name from ``SWPRSOURCE``.
+
+        Parameters
+        ----------
+        series : pint.solar_indices.SolarIndexSeries
+            The raw series. Smoothing is applied at evaluation time from
+            ``SWPRSMOOTH``.
+        ephemeral : bool, optional
+            Whether to mark the model as non-serialisable and warn. Default True.
+            :meth:`load_proxy_from_source` passes False when the series came from a
+            named source, because that is reproducible from ``SWPRSOURCE`` alone.
+        """
+        self.proxy_series = series
         self.proxy_smoothed_cache = None
         self.proxy_is_ephemeral = bool(ephemeral)
 
         if self.proxy_is_ephemeral:
             warn(
-                "Proxy data was supplied as arrays, so this model CANNOT be "
-                "written to a par file or reconstructed from one. print_par() will "
-                "emit SWPRSOURCE, and reading that par file back will resolve the "
-                "named series instead of these arrays, giving a different model "
-                "without saying so. For results you intend to keep, set SWPRSOURCE "
-                "to a named series or pin a file with $PINT_SOLAR_INDICES."
+                "The proxy series is not named by the par file, so this model "
+                "CANNOT be written to a par file or reconstructed from one. "
+                "print_par() will emit SWPRSOURCE, and reading that par file back "
+                "will resolve the named series instead of this one, giving a "
+                "different model without saying so. For results you intend to keep, "
+                "set SWPRSOURCE to a named series or pin a file with "
+                "$PINT_SOLAR_INDICES."
             )
 
     def load_proxy_from_source(
@@ -1587,55 +1628,42 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             Read this file instead of resolving the source. Note that a path is
             machine-specific and is not recorded in the par file.
         """
-        from pint import solar_indices
-
         name = self.SWPRSOURCE.value
-        mjd, vals = solar_indices.get_series(
+        series = solar_indices.get_series(
             name, download_policy=download_policy, path=path
         )
-        self.set_proxy(mjd, vals, ephemeral=path is not None)
-        log.info(f"Loaded {len(mjd)} samples of solar index {name!r}")
+        # An explicit path is machine-specific and is not recorded in the par file,
+        # so a model built this way cannot be written to file.
+        self.set_proxy_series(series, ephemeral=path is not None)
+        log.info(f"Loaded {series!r}")
 
-    def smoothed_proxy(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return (mjd, vals) for the proxy with ``SWPRSMOOTH`` applied.
+    def smoothed_proxy(self) -> "solar_indices.SolarIndexSeries":
+        """The proxy series with ``SWPRSMOOTH`` and ``SWPRSMOOTHKERNEL`` applied.
 
-        The smoothing width is in days, converted to samples using the median cadence
-        of the series, so the same ``SWPRSMOOTH`` means the same physical window
-        whether the proxy is sampled daily or monthly.  Without that conversion a
-        monthly F10.7 series smoothed with 81 would be averaged over 81 months, which
-        erases the solar cycle the proxy exists to carry.  The result is cached
-        against the width actually used, so changing ``SWPRSMOOTH`` takes effect
-        without reloading the series.
+        Smoothing is :meth:`~pint.solar_indices.SolarIndexSeries.smoothed`. The
+        width in days is converted to samples using the series median cadence, so
+        the same ``SWPRSMOOTH`` means the same physical window whether the proxy is
+        daily or monthly, and ``SWPRSMOOTHKERNEL`` names which function of
+        :data:`~pint.solar_indices.SMOOTHING_KERNELS` is applied: by default
+        ``"moving_average"``, a centred average weighting every sample in the window
+        equally, or ``"gaussian"``, weighted by a Gaussian of that full width at
+        half maximum.
+
+        Both are par file parameters, so the smoothing is part of the model rather
+        than a choice made in the calling script. That matters because ``SWPRBETA1``
+        is defined against the smoothed proxy, so changing either one redefines it.
+
+        The result is cached against the width and kernel actually used, so changing
+        them takes effect without reloading or re-smoothing the series.
         """
-        from scipy.ndimage import uniform_filter1d
-
-        if self.proxy_mjd is None:
-            # Resolve SWPRSOURCE on first use rather than in setup(), which PINT
-            # calls on every parameter change and must stay free of network I/O.
+        if self.proxy_series is None:
+            # Resolve SWPRSOURCE on first use rather than in setup()
             self.load_proxy_from_source()
-        width = float(self.SWPRSMOOTH.value or 0.0)
+        key = (float(self.SWPRSMOOTH.value or 0.0), self.SWPRSMOOTHKERNEL.value)
 
-        if (
-            self.proxy_smoothed_cache is not None
-            and self.proxy_smoothed_cache[0] == width
-        ):
-            return self.proxy_mjd, self.proxy_smoothed_cache[1]
-
-        vals = self.proxy_vals
-        if width > 0 and len(self.proxy_mjd) > 1:
-            cadence_days = float(np.median(np.diff(self.proxy_mjd)))
-            window = int(round(width / cadence_days)) if cadence_days > 0 else 0
-            if window > len(vals):
-                log.warning(
-                    f"SWPRSMOOTH={width} spans {window} samples at the proxy's "
-                    f"{cadence_days:.3g} d cadence, but the series has only "
-                    f"{len(vals)} samples; the result will be nearly constant."
-                )
-            if window > 1:
-                vals = uniform_filter1d(vals, size=window, mode="nearest")
-
-        self.proxy_smoothed_cache = (width, vals)
-        return self.proxy_mjd, vals
+        if self.proxy_smoothed_cache is None or self.proxy_smoothed_cache[0] != key:
+            self.proxy_smoothed_cache = (key, self.proxy_series.smoothed(*key))
+        return self.proxy_smoothed_cache[1]
 
     def get_proxy_at_toas(
         self, toas: TOAs, lag_days: Optional[float] = None
@@ -1652,42 +1680,55 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         Returns
         -------
         numpy.ndarray
-            Shape (n_toa,), in the proxy's own units.
+            Shape (n_toa,), **dimensionless magnitudes** in the proxy\'s own unit,
+            which is :attr:`~pint.solar_indices.SolarIndexSeries.unit`.
+
+        Notes
+        -----
+        The magnitudes are deliberately stripped of their unit here. ``SWPRBETA1``
+        is declared in cm^-3 while it is physically cm^-3 per proxy unit, because a
+        PINT parameter cannot carry a unit that depends on ``SWPRSOURCE``. Returning
+        a Quantity would make ``SWPRBETA1 * P`` come out in cm^-3 sfu and break
+        every derivative. The unit is still checked rather than discarded: a series
+        whose unit disagrees with the one in
+        :data:`~pint.solar_indices.SOURCES` warns on load.
         """
         if lag_days is None:
             lag_days = self.SWPRLAG.quantity.to_value(u.day)
-        mjd, vals = self.smoothed_proxy()
+        series = self.smoothed_proxy()
         toas_mjd = np.asarray(toas.table["tdbld"].data, dtype=float)
-        shifted = toas_mjd - lag_days
 
-        # Held at the endpoints outside the series, but say so: an epoch outside the
-        # proxy coverage is modelled with a constant density, which is a modelling
-        # choice the user should be making knowingly rather than discovering later.
-        from pint.solar_indices import check_coverage
+        # Held at the endpoints outside the series
+        return series.evaluate(toas_mjd - lag_days).to_value(series.unit)
 
-        check_coverage(mjd, shifted, name=f"{self.SWPRSOURCE.value} proxy")
+    def sw_proxy_ne(self, toas: TOAs) -> u.Quantity:
+        r"""The modelled electron density at 1 AU [cm^-3] at the TOA epochs.
 
-        return np.interp(shifted, mjd, vals, left=vals[0], right=vals[-1])
+        .. math::
 
-    def proxy_ne(self, toas: TOAs) -> u.Quantity:
-        """The proxy contribution to n_E [cm^-3], ``SWPRBETA1 * P(t - SWPRLAG)``."""
-        return self.SWPRBETA1.quantity * self.get_proxy_at_toas(toas)
+            n_E(t) = \mathrm{SWPRBETA0}
+                     + \mathrm{SWPRBETA1} \, P(t - \mathrm{SWPRLAG})
 
-    def total_ne(self, toas: TOAs) -> u.Quantity:
-        """The full modelled density ``SWPRBETA0 + SWPRBETA1 * P(t)`` [cm^-3]."""
-        return self.SWPRBETA0.quantity * np.ones(len(toas)) + self.proxy_ne(toas)
+        Parameters
+        ----------
+        toas : pint.toa.TOAs
 
-    # ── model ─────────────────────────────────────────────────────────────────
+        Returns
+        -------
+        astropy.units.Quantity
+            Shape (n_toa,), in cm^-3.
+
+        """
+        return self.SWPRBETA0.quantity * np.ones(len(toas)) + (
+            self.SWPRBETA1.quantity * self.get_proxy_at_toas(toas)
+        )
 
     def solar_wind_geometry(self, toas: TOAs) -> u.Quantity:
         """Return the geometry of solar wind dispersion.
 
         Identical to :meth:`SolarWindDispersion.solar_wind_geometry`: for ``SWM==0``
         the geometry of equations 29, 30 of Edwards et al. 2006, and for ``SWM==1``
-        Eqn. 11 of Hazboun et al. (2022). The physics lives in the module-level
-        :func:`_solar_wind_geometry`; this is the assembly around it, duplicated for
-        the same reason :class:`SolarWindDispersionX` duplicates it, namely that the
-        component owns its own power-law parameters.
+        Eqn. 11 of Hazboun et al. (2022).
 
         Parameters
         ----------
@@ -1729,7 +1770,9 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 f"Solar Dispersion Delay not implemented for SWM {self.SWM.value}"
             )
 
-        return (self.total_ne(toas) * self.solar_wind_geometry(toas)).to(u.pc / u.cm**3)
+        return (self.sw_proxy_ne(toas) * self.solar_wind_geometry(toas)).to(
+            u.pc / u.cm**3
+        )
 
     def solar_wind_delay(
         self, toas: TOAs, acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None
@@ -1745,18 +1788,14 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             \bar{n}_E = \mathrm{SWPRBETA0}
                         + \mathrm{SWPRBETA1} \, \langle P \rangle
 
-        This is the quantity to quote. ``SWPRBETA0`` and ``SWPRBETA1`` are
-        anticorrelated at about -0.93, so their individual uncertainties are inflated
-        relative to the precision on the density itself, while this combination is
-        recovered at full precision. It is also the quantity that corresponds to
-        ``NE_SW`` in :class:`SolarWindDispersion`, so it is what to compare against a
-        constant-density fit.
+        ``SWPRBETA0`` and ``SWPRBETA1`` are highly anti-correlated, so their individual
+        uncertainties are inflated relative to the precision on the density itself,
+        while this combination is recovered at full precision. It is useful to compare
+        this mean value against ``NE_SW`` in :class:`SolarWindDispersion`.
         """
         return self.SWPRBETA0.quantity + self.SWPRBETA1.quantity * np.mean(
             self.get_proxy_at_toas(toas)
         )
-
-    # ── derivatives ───────────────────────────────────────────────────────────
 
     def d_dm_d_swprbeta0(
         self,
@@ -1864,7 +1903,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         d_geom_dp = self.d_solar_wind_geometry_d_swp(
             toas, param_name, acc_delay=acc_delay
         )
-        return (self.total_ne(toas) * d_geom_dp).to(u.pc / u.cm**3)
+        return (self.sw_proxy_ne(toas) * d_geom_dp).to(u.pc / u.cm**3)
 
     def d_delay_d_swp(
         self,
@@ -1873,8 +1912,6 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         acc_delay: Optional[Union[u.Quantity, np.ndarray]] = None,
     ) -> u.Quantity:
         return self.d_delay_d_dmparam(toas, param_name)
-
-    # ── bookkeeping ───────────────────────────────────────────────────────────
 
     def setup(self) -> None:
         super().setup()
@@ -1895,12 +1932,16 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             raise ValueError(
                 f"Solar Dispersion Delay not implemented for SWM {self.SWM.value}"
             )
-        from pint.solar_indices import SOURCES
-
-        if self.SWPRSOURCE.value not in SOURCES:
+        if self.SWPRSOURCE.value not in solar_indices.SOURCES:
             raise ValueError(
                 f"SWPRSOURCE={self.SWPRSOURCE.value!r} is not a known series; "
-                f"known: {sorted(SOURCES)}"
+                f"known: {sorted(solar_indices.SOURCES)}"
+            )
+        if self.SWPRSMOOTHKERNEL.value not in solar_indices.SMOOTHING_KERNELS:
+            raise ValueError(
+                f"SWPRSMOOTHKERNEL={self.SWPRSMOOTHKERNEL.value!r} is not a known "
+                f"smoothing kernel; known: "
+                f"{sorted(solar_indices.SMOOTHING_KERNELS)}"
             )
 
     def print_par(self, format: Literal["tempo", "tempo2", "pint"] = "pint") -> str:
@@ -1919,6 +1960,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             "SWPRBETA1",
             "SWPRLAG",
             "SWPRSMOOTH",
+            "SWPRSMOOTHKERNEL",
             "SWPRSOURCE",
             "SWM",
             "SWP",

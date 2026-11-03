@@ -1,15 +1,13 @@
 """Solar activity index downloading, caching and parsing.
 
-Provides the external time series that solar-wind models need as covariates:
+Provides the external time series that solar-wind models need as a proxy:
 the 10.7 cm radio flux (F10.7), the sunspot number, and in-situ solar wind
 proton density from ACE.
 
-Fetching, caching, expiry and failure
-handling are all delegated to
+Fetching, caching, expiration and failure are handled by
 :func:`pint.observatory.global_clock_corrections.get_file`, which keys the
 astropy download cache by URL, expires entries against an update interval, and
-on a network error warns and returns the stale cached copy rather than raising.
-That last behaviour is what makes this safe to call from a long analysis run.
+on a network error warns and returns the stale cached copy.
 
 Series are resolved in two tiers, similar to how
 :func:`pint.observatory.find_clock_file` is used for clock corrections:
@@ -19,11 +17,6 @@ Series are resolved in two tiers, similar to how
 
 Tier 1 is what pins an analysis to a fixed snapshot, because the content behind a
 fixed upstream URL changes as new data arrive.
-
-Nothing is bundled with PINT. A snapshot of a product that grows every month would
-be out of date the day it shipped, and :func:`get_file` already falls back to the
-stale cached copy with a warning rather than raising when the network is
-unreachable, so a long run does not die for want of a shipped file.
 
 When neither tier can supply the series, hand the arrays over directly with
 :meth:`pint.models.solar_wind_dispersion.SolarWindProxyRegression.set_proxy`.
@@ -55,15 +48,23 @@ import os
 from calendar import monthrange
 from datetime import date
 from pathlib import Path
-from typing import Callable, List, Literal, NamedTuple, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Literal, NamedTuple, Optional, Tuple, Union
 from warnings import warn
 
+import astropy.units as u
 import numpy as np
+from astropy.table import Table
 from loguru import logger as log
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
 from pint.observatory.global_clock_corrections import get_file
+from pint.pulsar_mjd import Time
+from pint.types import file_like, quantity_like, time_like
+from pint.utils import compute_hash
 
 __all__ = [
+    # the series object
+    "SolarIndexSeries",
     # resolution and the series themselves
     "get_series",
     "check_coverage",
@@ -81,6 +82,12 @@ __all__ = [
     "mjd_from_year_month",
     "MJD_ORDINAL_OFFSET",
     "ACE_EPOCH_MJD",
+    # smoothing
+    "SMOOTHING_KERNELS",
+    "smooth_moving_average",
+    "smooth_gaussian",
+    # units
+    "sfu",
 ]
 
 pint_solar_env_var = "PINT_SOLAR_INDICES"
@@ -90,6 +97,46 @@ MJD_ORDINAL_OFFSET = date(1858, 11, 17).toordinal()
 
 # ACE timestamps are seconds since 1996-01-01 00:00:00 UT.
 ACE_EPOCH_MJD = date(1996, 1, 1).toordinal() - MJD_ORDINAL_OFFSET
+
+# The solar flux unit, the conventional unit of F10.7, which astropy does not
+# define. 1 sfu = 1e-22 W m^-2 Hz^-1 = 1e4 Jy.
+# see Tapping 2013: doi:10.1002/swe.20064.
+sfu = u.def_unit("sfu", 1e-22 * u.W / u.m**2 / u.Hz)
+
+# Full width at half maximum of a Gaussian, in units of its standard deviation.
+FWHM_PER_SIGMA = float(np.sqrt(8.0 * np.log(2.0)))
+
+
+def smooth_moving_average(values: np.ndarray, window: int) -> np.ndarray:
+    """A centred moving average, equally weighting *window* samples.
+
+    The window is forced to an odd number of samples so that it is symmetric about
+    the sample it is evaluated at. Samples within half a window of either end are
+    averaged over a window padded with the endpoint value, so the smoothed series
+    is defined everywhere the raw one is.
+    """
+    return uniform_filter1d(values, size=window + 1 - window % 2, mode="nearest")
+
+
+def smooth_gaussian(values: np.ndarray, window: int) -> np.ndarray:
+    """A Gaussian-weighted mean whose full width at half maximum is *window* samples.
+
+    The width is the FWHM rather than the standard deviation so that it means
+    roughly the same thing as the width of :func:`smooth_moving_average`. The ends
+    are padded as there.
+    """
+    return gaussian_filter1d(values, sigma=window / FWHM_PER_SIGMA, mode="nearest")
+
+
+#: The smoothing functions :meth:`SolarIndexSeries.smoothed` can apply, by name.
+#: Each takes the sample values and an integer width in samples and returns an
+#: array of the same shape. Adding an entry here makes that kernel available to
+#: :meth:`SolarIndexSeries.smoothed` and selectable from a par file through
+#: ``SWPRSMOOTHKERNEL``.
+SMOOTHING_KERNELS: Dict[str, Callable[[np.ndarray, int], np.ndarray]] = {
+    "moving_average": smooth_moving_average,
+    "gaussian": smooth_gaussian,
+}
 
 
 def mjd_from_ymd(yyyymmdd: Union[int, str]) -> int:
@@ -107,25 +154,320 @@ def mjd_from_year_month(tag: str) -> float:
     epoch of an N-day month beginning at ``mjd0`` is ``mjd0 + (N - 1) / 2``: a
     31-day month lands on the 16th at 0h and a 30-day month on the 15th at 12h.
 
-    Day 15 flat, which is the approximation upstream documentation means by "the
-    middle of the month", is early by 0.719 d on average over the NOAA record,
-    +1.0 d for a 31-day month and -0.5 d for a non-leap February. The resulting
-    change in a sunspot-driven n_E is 0.008 cm^-3 rms at ``SWPRSMOOTH=81``, so it
-    moves nothing measurable; it is done exactly because it costs nothing to.
     """
     year, month = (int(x) for x in tag.split("-")[:2])
     first = date(year, month, 1).toordinal() - MJD_ORDINAL_OFFSET
     return first + (monthrange(year, month)[1] - 1) / 2.0
 
 
-# ── parsers ───────────────────────────────────────────────────────────────────
-#
-# Each returns (mjd, value), sorted by mjd, with missing data removed.
+class SolarIndexSeries:
+    """A solar activity time series, its units, and where it came from.
+
+    The epochs are an :class:`astropy.time.Time` and the values an
+    :class:`astropy.units.Quantity`, so the units travel with the data rather than
+    being described in a docstring, and the metadata fields record which snapshot
+    an analysis actually read. Interpolation, bounds checking and smoothing are
+    methods, so a caller passes one self-contained object instead of two arrays and
+    a convention.
+
+    This deliberately follows :class:`pint.observatory.clock_file.ClockFile`, which
+    solves the same problem for clock corrections: validate on construction, expose
+    the data through properties, and evaluate through a method that handles the ends
+    of the record.
+
+    Parameters
+    ----------
+    mjd : array_like
+        Sample epochs as MJD, UTC. Must be non-decreasing.
+    value : astropy.units.Quantity or array_like
+        Sample values. A plain array is taken to be dimensionless, which is right
+        for the sunspot number and wrong for anything else, so prefer a Quantity.
+    name : str, optional
+        The :data:`SOURCES` key this came from, e.g. ``"f107"``.
+    description : str, optional
+        One line naming the quantity and its provider.
+    url : str, optional
+        Where the file was fetched from, when it was fetched.
+    filename : str or Path, optional
+        The file it was read from.
+    retrieved : astropy.time.Time, optional
+        When that file was last written, which is the age of the snapshot rather
+        than the age of the data.
+    sha256 : str, optional
+        Hash of the file read, so a published result can name exactly its input.
+    reference : str, optional
+        Documentation for the series.
+    smooth_days : float, optional
+        Width of the smoothing already applied, 0 for the raw series. Set by
+        :meth:`smoothed`; do not pass it by hand.
+    smooth_kernel : str, optional
+        Which of :data:`SMOOTHING_KERNELS` was applied. Set by :meth:`smoothed`;
+        do not pass it by hand.
+
+    Examples
+    --------
+    >>> from pint import solar_indices
+    >>> f107 = solar_indices.get_series("f107")       # doctest: +SKIP
+    >>> f107.values.unit                              # doctest: +SKIP
+    Unit("sfu")
+    >>> f107.smoothed(81).evaluate([55000.0, 55100.0])  # doctest: +SKIP
+    <Quantity [...] sfu>
+    """
+
+    def __init__(
+        self,
+        mjd: time_like,
+        value: quantity_like,
+        *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        url: Optional[str] = None,
+        filename: Optional[file_like] = None,
+        retrieved: Optional[Time] = None,
+        sha256: Optional[str] = None,
+        reference: Optional[str] = None,
+        smooth_days: float = 0.0,
+        smooth_kernel: str = "moving_average",
+    ):
+        mjd = mjd.mjd if isinstance(mjd, Time) else np.asarray(mjd, dtype=float)
+        value = u.Quantity(value)
+        if mjd.shape != value.shape:
+            raise ValueError(f"mjd has {mjd.shape} entries but value has {value.shape}")
+        if mjd.size > 1 and not np.all(np.diff(mjd) >= 0):
+            i = int(np.where(np.diff(mjd) < 0)[0][0])
+            raise ValueError(
+                f"Solar index series {name or '?'} is out of order: "
+                f"MJD {mjd[i]} > {mjd[i + 1]}"
+            )
+        self._mjd = mjd
+        self._time = None  # built on demand by .time
+        self._value = value
+        self.name = name
+        self.description = description
+        self.url = url
+        self.filename = filename
+        self.retrieved = retrieved
+        self.sha256 = sha256
+        self.reference = reference
+        self.smooth_days = float(smooth_days)
+        self.smooth_kernel = smooth_kernel
+
+    # ── the data ──────────────────────────────────────────────────────────────
+
+    @property
+    def time(self) -> Time:
+        """An :class:`astropy.time.Time` of the sample epochs.
+
+        Built on first access rather than in the constructor. Interpolation works
+        from :attr:`mjd`, and the sunspot record reaches back to 1749, where every
+        UTC conversion draws an :class:`erfa.ErfaWarning` about a dubious year.
+        """
+        if self._time is None:
+            self._time = Time(self._mjd, format="pulsar_mjd", scale="utc")
+        return self._time
+
+    @property
+    def values(self) -> u.Quantity:
+        """An :class:`astropy.units.Quantity` of the sample values."""
+        return self._value
+
+    @property
+    def unit(self) -> u.UnitBase:
+        """The unit of :attr:`values`."""
+        return self._value.unit
+
+    @property
+    def mjd(self) -> np.ndarray:
+        """The sample epochs as plain MJD floats, for interpolation."""
+        return self._mjd
+
+    @property
+    def cadence_days(self) -> float:
+        """Median spacing of the samples, in days.
+
+        This is what converts a smoothing width in days to a number of samples, so
+        the same width means the same physical window on a daily and a monthly
+        series. Returns ``nan`` for a series too short to have a spacing.
+        """
+        return float(np.median(np.diff(self.mjd))) if len(self) > 1 else float("nan")
+
+    def __len__(self) -> int:
+        return len(self._mjd)
+
+    def __repr__(self) -> str:
+        span = f"MJD {self.mjd[0]:.1f}-{self.mjd[-1]:.1f}" if len(self) else "empty"
+        smooth = (
+            f", smoothed {self.smooth_days:g} d ({self.smooth_kernel})"
+            if self.smooth_days
+            else ""
+        )
+        return (
+            f"<SolarIndexSeries {self.name or '?'}: {len(self)} samples, {span}, "
+            f"{self.unit if self.unit != u.dimensionless_unscaled else 'dimensionless'}"
+            f"{smooth}>"
+        )
+
+    # ── evaluation ────────────────────────────────────────────────────────────
+
+    def evaluate(
+        self, mjd: time_like, limits: Literal["warn", "error"] = "warn"
+    ) -> u.Quantity:
+        """The series interpolated to *mjd*, held flat beyond either end.
+
+        Parameters
+        ----------
+        mjd : array_like or astropy.time.Time
+            Epochs to evaluate at.
+        limits : "warn" or "error"
+            What to do about epochs the series does not cover. ``"warn"``, the
+            default, holds the endpoint value and says so, which models the missing
+            stretch as a constant. ``"error"`` raises instead, which is what a long
+            unattended fit usually wants.
+
+        Returns
+        -------
+        astropy.units.Quantity
+            Same shape as *mjd*, in :attr:`unit`.
+
+        Notes
+        -----
+        The flat extension is the interpolator's own, ``np.interp(..., left=raw[0],
+        right=raw[-1])``, which is what
+        ``interp1d(..., bounds_error=False, fill_value=(y[0], y[-1]))`` does. What
+        :meth:`check_coverage` adds is the part no interpolator offers: a report of
+        how many epochs fell off each end and by how many days. Holding a covariate
+        flat across a gap is a modelling choice, so it is reported by default;
+        ``limits="error"`` turns the same report into the exception message.
+        """
+        if len(self) == 0:
+            raise ValueError(f"solar index series {self.name or '?'} is empty")
+        epochs = mjd.mjd if isinstance(mjd, Time) else np.asarray(mjd, dtype=float)
+        self.check_coverage(epochs, limits=limits)
+        raw = self._value.value
+        return np.interp(epochs, self.mjd, raw, left=raw[0], right=raw[-1]) * self.unit
+
+    def check_coverage(
+        self,
+        mjd: time_like,
+        tolerance_days: float = 0.0,
+        limits: Literal["warn", "error"] = "warn",
+    ) -> Tuple[int, int]:
+        """How many of *mjd* fall off each end of the series. See :func:`check_coverage`."""
+        epochs = mjd.mjd if isinstance(mjd, Time) else mjd
+        return check_coverage(
+            self.mjd,
+            epochs,
+            name=self.name or "solar index",
+            tolerance_days=tolerance_days,
+            limits=limits,
+        )
+
+    def smoothed(
+        self, width_days: float, kernel: str = "moving_average"
+    ) -> "SolarIndexSeries":
+        """A copy of this series smoothed over *width_days*.
+
+        Parameters
+        ----------
+        width_days : float
+            Width of the smoothing window, in days. 0, or a width narrower than the
+            sample spacing, returns the series unchanged.
+        kernel : str, optional
+            Which smoothing function to apply, a key of :data:`SMOOTHING_KERNELS`.
+            The default ``"moving_average"`` weights every sample in the window
+            equally; ``"gaussian"`` weights them by a Gaussian of that full width at
+            half maximum. See those functions for exactly what each computes,
+            including how the ends of the series are handled.
+
+        Returns
+        -------
+        SolarIndexSeries
+            A new series. :attr:`smooth_days` and :attr:`smooth_kernel` record what
+            was applied.
+
+        Notes
+        -----
+        The width is in days and is converted to a sample count using
+        :attr:`cadence_days`, so 81 days means 81 samples of a daily series and 3 of
+        a monthly one. Without that conversion a monthly series smoothed with 81
+        would be averaged over 81 months, erasing the solar cycle the series exists
+        to carry.
+
+        Smoothing is applied here rather than stored, so the raw series is what gets
+        cached and a change of width or kernel cannot silently redefine a fitted
+        coefficient.
+        """
+        if width_days <= 0 or len(self) < 2:
+            return self
+        try:
+            smoother = SMOOTHING_KERNELS[kernel]
+        except KeyError:
+            raise ValueError(
+                f"Unknown smoothing kernel {kernel!r} for solar index series "
+                f"{self.name or '?'}; known: {sorted(SMOOTHING_KERNELS)}"
+            ) from None
+        cadence = self.cadence_days
+        window = int(round(width_days / cadence)) if cadence > 0 else 0
+        if window > len(self):
+            log.warning(
+                f"Smoothing width {width_days} d spans {window} samples at the "
+                f"{cadence:.3g} d cadence of {self.name or 'this series'}, which has "
+                f"only {len(self)}; the result will be nearly constant."
+            )
+        if window <= 1:
+            return self
+        return self._with_values(
+            smoother(self._value.value, window) * self.unit,
+            smooth_days=width_days,
+            smooth_kernel=kernel,
+        )
+
+    # metadata
+
+    def get_metadata(self) -> Dict[str, Any]:
+        """Everything needed to say which snapshot of the series was used.
+
+        Content at a fixed upstream URL changes as new data arrive, so a result that
+        is meant to be reproducible has to record what it read, not just which name
+        it asked for. This is that record, as plain values ready to serialise.
+        """
+        return {
+            "name": self.name,
+            "description": self.description,
+            "unit": str(self.unit),
+            "url": self.url,
+            "filename": None if self.filename is None else str(self.filename),
+            "retrieved": None if self.retrieved is None else self.retrieved.isot,
+            "sha256": self.sha256,
+            "reference": self.reference,
+            "n_samples": len(self),
+            "mjd_start": float(self.mjd[0]) if len(self) else None,
+            "mjd_end": float(self.mjd[-1]) if len(self) else None,
+            "smooth_days": self.smooth_days,
+            "smooth_kernel": self.smooth_kernel,
+        }
+
+    def _with_values(self, value: u.Quantity, **changes) -> "SolarIndexSeries":
+        """This series with different values, carrying the metadata across."""
+        fields = dict(
+            name=self.name,
+            description=self.description,
+            url=self.url,
+            filename=self.filename,
+            retrieved=self.retrieved,
+            sha256=self.sha256,
+            reference=self.reference,
+            smooth_days=self.smooth_days,
+            smooth_kernel=self.smooth_kernel,
+        )
+        fields.update(changes)
+        return SolarIndexSeries(self.mjd, value, **fields)
 
 
-def parse_drao_f107(
-    path: Union[str, Path], column: str = "fluxadjflux"
-) -> Tuple[np.ndarray, np.ndarray]:
+# parsers -- each returns (mjd, value), sorted by mjd, with missing data removed.
+
+
+def parse_drao_f107(path: file_like, column: str = "fluxadjflux") -> SolarIndexSeries:
     """Daily F10.7 from the DRAO/Penticton ``fluxtable.txt``.
 
     The file carries roughly three measurements a day (17:00, 20:00 and 23:00 UT),
@@ -133,19 +475,7 @@ def parse_drao_f107(
 
     The column choice is not a detail. ``fluxobsflux`` is the flux as received at
     Earth and carries the Sun-Earth distance annual modulation; ``fluxadjflux`` is
-    corrected to 1 AU and is the default here. Using the observed column would put
-    a spurious annual term into the covariate at precisely the frequency the solar
-    wind signal occupies, which is the one place it could not be told apart.
-
-    This is the only F10.7 source offered. NOAA SWPC publishes a monthly F10.7 in
-    its solar-cycle indices JSON, but it is not an independent measurement: it is
-    the monthly mean of this same Penticton series, and of the **observed** column
-    rather than the adjusted one. Measured over 263 complete months, NOAA divided
-    by the monthly mean of ``fluxobsflux`` has ratio 0.99938 with scatter 0.0100,
-    against 0.99963 with scatter 0.0256 for ``fluxadjflux``; the extra scatter is
-    exactly the annual term, since sqrt(0.0236^2 + 0.0100^2) = 0.0256 and 0.0236 is
-    that term's standard deviation. Offering it would mean offering the same data,
-    coarser, in the convention this function exists to avoid.
+    corrected to 1 AU and is the default here.
 
     Parameters
     ----------
@@ -155,45 +485,44 @@ def parse_drao_f107(
 
     Returns
     -------
-    mjd : ndarray of float, one entry per day
-    flux : ndarray of float, solar flux units
+    SolarIndexSeries
+        One sample per calendar day, with values in :data:`sfu`.
+
+    References
+    ----------
+    - Tapping, K. F. (2013), The 10.7 cm solar radio flux (F10.7), Space Weather, 11, 394-406, doi:10.1002/swe.20064.
     """
-    with open(path) as f:
-        lines = f.readlines()
+    # The table is a two-line header (names, then a row of dashes) over
+    # fixed-width columns, which astropy reads directly.
+    try:
+        table = Table.read(path, format="ascii.fixed_width_two_line")
+    except Exception as e:
+        raise ValueError(f"{path} is not a DRAO flux table: {e}") from e
+    if "fluxdate" not in table.colnames:
+        raise ValueError(f"{path} has no 'fluxdate' column; not a DRAO flux table")
+    if column not in table.colnames:
+        raise ValueError(f"{column!r} not among DRAO columns {table.colnames}")
 
-    header = None
-    for line in lines:
-        if "fluxdate" in line:
-            header = line.split()
-            break
-    if header is None:
-        raise ValueError(f"{path} has no 'fluxdate' header line; not a DRAO flux table")
-    if column not in header:
-        raise ValueError(f"{column!r} not among DRAO columns {header}")
-    icol = header.index(column)
-
-    by_day = {}
-    for line in lines:
-        fields = line.split()
-        if len(fields) <= icol or not fields[0].isdigit():
-            continue
-        try:
-            value = float(fields[icol])
-        except ValueError:
-            continue
-        if value <= 0:
-            continue
-        by_day.setdefault(mjd_from_ymd(fields[0]), []).append(value)
-
-    if not by_day:
+    table = table[table[column] > 0]
+    if len(table) == 0:
         raise ValueError(f"no usable rows parsed from {path}")
 
-    mjd = np.array(sorted(by_day), dtype=float)
-    flux = np.array([np.mean(by_day[m]) for m in mjd], dtype=float)
-    return mjd, flux
+    # Several measurements a day collapse to a daily mean, keyed by calendar date.
+    table["mjd"] = [mjd_from_ymd(d) for d in table["fluxdate"]]
+    daily = table["mjd", column].group_by("mjd").groups.aggregate(np.mean)
+    return SolarIndexSeries(
+        np.asarray(daily["mjd"], dtype=float),
+        np.asarray(daily[column], dtype=float) * sfu,
+        name="f107",
+        description=f"10.7 cm solar flux, DRAO Penticton, {column}",
+        filename=path,
+        reference="https://www.spaceweather.gc.ca/forecast-prevision/solar-solaire/solarflux/sx-en.php",
+    )
 
 
-def parse_noaa(path: Union[str, Path], key: str) -> Tuple[np.ndarray, np.ndarray]:
+def parse_noaa(
+    path: file_like, key: str, unit: u.UnitBase = u.dimensionless_unscaled
+) -> SolarIndexSeries:
     """A single quantity from the NOAA SWPC solar-cycle indices JSON.
 
     Missing values appear as a nominal ``-1.0``. Note this is not the same as
@@ -202,6 +531,12 @@ def parse_noaa(path: Union[str, Path], key: str) -> Tuple[np.ndarray, np.ndarray
 
     Only the sunspot number is exposed through :data:`SOURCES`. The same file
     carries an ``f10.7`` key, but we draw f10.7 from the DRAO source.
+
+    Returns
+    -------
+    SolarIndexSeries
+        One sample per month, placed at the middle of the month. See
+        :func:`mjd_from_year_month`.
     """
     with open(path) as f:
         rows = json.load(f)
@@ -218,18 +553,29 @@ def parse_noaa(path: Union[str, Path], key: str) -> Tuple[np.ndarray, np.ndarray
         raise ValueError(f"no rows with a usable {key!r} in {path}")
 
     order = np.argsort(mjd)
-    return np.asarray(mjd, dtype=float)[order], np.asarray(value, dtype=float)[order]
+    return SolarIndexSeries(
+        np.asarray(mjd, dtype=float)[order],
+        np.asarray(value, dtype=float)[order] * unit,
+        name=key,
+        description=f"Monthly {key}, NOAA SWPC solar-cycle indices",
+        filename=path,
+        reference="https://www.sidc.be/SILSO/datafiles",
+    )
 
 
-def parse_noaa_ssn(path: Union[str, Path]) -> Tuple[np.ndarray, np.ndarray]:
+def parse_noaa_ssn(path: file_like) -> SolarIndexSeries:
     """Monthly international sunspot number from the NOAA SWPC JSON.
 
-    Unlike F10.7 in the same file, this runs the full record from 1749-01.
+    Unlike F10.7 in the same file, this runs the full record from 1749-01. A
+    sunspot number is a count, so the series is dimensionless.
     """
-    return parse_noaa(path, "ssn")
+    series = parse_noaa(path, "ssn")
+    series.name = "ssn"
+    series.description = "Monthly international sunspot number, NOAA SWPC"
+    return series
 
 
-def parse_ace_density(path: Union[str, Path]) -> Tuple[np.ndarray, np.ndarray]:
+def parse_ace_density(path: file_like) -> SolarIndexSeries:
     """Solar wind proton density from an ACE Science Center level-2 export.
 
     Reads the whitespace-delimited text the ASC data retrieval form produces,
@@ -251,8 +597,8 @@ def parse_ace_density(path: Union[str, Path]) -> Tuple[np.ndarray, np.ndarray]:
 
     Returns
     -------
-    mjd : ndarray of float
-    density : ndarray of float, cm^-3
+    SolarIndexSeries
+        Values in cm^-3.
     """
     with open(path) as f:
         lines = f.readlines()
@@ -290,7 +636,14 @@ def parse_ace_density(path: Union[str, Path]) -> Tuple[np.ndarray, np.ndarray]:
         raise ValueError(f"no usable rows parsed from {path}")
 
     order = np.argsort(mjd)
-    return np.asarray(mjd, dtype=float)[order], np.asarray(density, dtype=float)[order]
+    return SolarIndexSeries(
+        np.asarray(mjd, dtype=float)[order],
+        np.asarray(density, dtype=float)[order] * u.cm**-3,
+        name="ace_density",
+        description="Solar wind proton density, ACE SWEPAM level 2",
+        filename=path,
+        reference="https://izw1.caltech.edu/ACE/ASC/level2/lvl2DATA_SWEPAM.html",
+    )
 
 
 # Sources
@@ -311,10 +664,12 @@ class Source(NamedTuple):
         How long a cached copy stays fresh, passed to
         :func:`pint.observatory.global_clock_corrections.get_file`.
     parser : callable
-        Reads the file and returns ``(mjd, value)``.
-    units : str
-        Units of *value*, for the record. Empty for a dimensionless series
-        such as the sunspot number.
+        Reads the file and returns a :class:`SolarIndexSeries`.
+    unit : astropy.units.UnitBase
+        Unit of the series values. :data:`astropy.units.dimensionless_unscaled`
+        for a count such as the sunspot number. The parser attaches this to the
+        data, so it is carried by the series rather than being a convention a
+        caller has to remember.
     description : str
         One line naming the quantity and its provider.
     """
@@ -322,8 +677,8 @@ class Source(NamedTuple):
     filename: str
     url_base: Optional[str]
     update_interval_days: Optional[float]
-    parser: Callable[..., Tuple[np.ndarray, np.ndarray]]
-    units: str
+    parser: Callable[..., "SolarIndexSeries"]
+    unit: u.UnitBase
     description: str
 
 
@@ -333,7 +688,7 @@ SOURCES = {
         url_base="https://www.spaceweather.gc.ca/solar_flux_data/daily_flux_values/",
         update_interval_days=1,
         parser=parse_drao_f107,
-        units="sfu",
+        unit=sfu,
         description="Daily 10.7 cm solar flux adjusted to 1 AU, DRAO Penticton",
     ),
     "ssn": Source(
@@ -341,7 +696,7 @@ SOURCES = {
         url_base="https://services.swpc.noaa.gov/json/solar-cycle/",
         update_interval_days=30,
         parser=parse_noaa_ssn,
-        units="",
+        unit=u.dimensionless_unscaled,
         description="Monthly international sunspot number, NOAA SWPC",
     ),
     "ace_density": Source(
@@ -349,7 +704,7 @@ SOURCES = {
         url_base=None,  # no bulk text product upstream; see parse_ace_density
         update_interval_days=None,
         parser=parse_ace_density,
-        units="cm^-3",
+        unit=u.cm**-3,
         description="Solar wind proton density, ACE SWEPAM level 2 (manual export)",
     ),
 }
@@ -363,14 +718,45 @@ def local_candidate(filename: str) -> Optional[Path]:
     return p if p.exists() else None
 
 
+def _finish(
+    series: SolarIndexSeries,
+    source: Source,
+    path: file_like,
+    name: str,
+    url: Optional[str] = None,
+) -> SolarIndexSeries:
+    """Stamp a freshly parsed series with where it was read from.
+
+    The hash and the modification time are what let a result name its input
+    exactly, since the content behind a fixed URL changes as data arrive.
+    """
+    series.name = name
+    series.url = url
+    series.filename = str(path)
+    if series.description is None:
+        series.description = source.description
+    try:
+        series.retrieved = Time(os.path.getmtime(path), format="unix", scale="utc")
+        series.sha256 = compute_hash(path).hex()
+    except OSError as e:  # a file-like object, or one that has since gone away
+        log.debug(f"Could not record metadata for solar index {name}: {e}")
+    if series.unit != source.unit:
+        warn(
+            f"Solar index {name} parsed to {series.unit!s} but SOURCES declares "
+            f"{source.unit!s}. A unit change silently rescales any fitted "
+            f"coefficient, so check which column or file was read."
+        )
+    return series
+
+
 def get_series(
     name: str = "f107",
     download_policy: Literal[
         "always", "never", "if_expired", "if_missing"
     ] = "if_expired",
-    path: Optional[Union[str, Path]] = None,
+    path: Optional[file_like] = None,
     **parser_kwargs,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> SolarIndexSeries:
     """Return a solar activity time series as ``(mjd, value)``.
 
     Parameters
@@ -391,8 +777,10 @@ def get_series(
 
     Returns
     -------
-    mjd : ndarray of float
-    value : ndarray of float, in the source's units
+    SolarIndexSeries
+        The series, with its unit attached to the values and its metadata
+        recorded. Use :meth:`SolarIndexSeries.evaluate` to interpolate it and
+        :meth:`SolarIndexSeries.get_metadata` to record what was read.
     """
     if name not in SOURCES:
         raise KeyError(f"unknown series {name!r}; known: {sorted(SOURCES)}")
@@ -400,14 +788,14 @@ def get_series(
 
     if path is not None:
         log.info(f"Solar index {name} read from the supplied path {path}")
-        return source.parser(path, **parser_kwargs)
+        return _finish(source.parser(path, **parser_kwargs), source, path, name)
 
     local = local_candidate(source.filename)
     if local is not None:
         log.info(
             f"Solar index {name} read from {local} because of {pint_solar_env_var}"
         )
-        return source.parser(local, **parser_kwargs)
+        return _finish(source.parser(local, **parser_kwargs), source, local, name)
 
     if source.url_base is not None:
         try:
@@ -418,7 +806,13 @@ def get_series(
                 url_base=source.url_base,
             )
             log.info(f"Solar index {name} read from {resolved}")
-            return source.parser(resolved, **parser_kwargs)
+            return _finish(
+                source.parser(resolved, **parser_kwargs),
+                source,
+                resolved,
+                name,
+                url=source.url_base + source.filename,
+            )
         except (OSError, KeyError) as e:
             log.warning(
                 f"Could not obtain solar index {name} from {source.url_base}: {e}"
@@ -440,14 +834,15 @@ def get_series(
 
 
 def check_coverage(
-    mjd: Union[np.ndarray, List[float]],
-    toas_mjd: Union[np.ndarray, List[float]],
+    mjd: time_like,
+    toas_mjd: time_like,
     name: str = "solar index",
     tolerance_days: float = 0.0,
+    limits: Literal["warn", "error"] = "warn",
 ) -> Tuple[int, int]:
     """Warn when a series does not span the epochs it will be evaluated at.
 
-    A covariate that stops short is held at its endpoint value, which models the
+    A proxy series that stops short is held at its endpoint value, which models the
     missing stretch as constant.
 
     Parameters
@@ -460,6 +855,10 @@ def check_coverage(
         Used in the message.
     tolerance_days : float
         Gaps no larger than this are not reported.
+    limits : "warn" or "error"
+        Whether an uncovered epoch is a warning, the default, or a
+        :exc:`ValueError`. Holding a covariate flat outside its range is a
+        modelling choice, so an unattended fit may prefer to refuse.
 
     Returns
     -------
@@ -488,10 +887,13 @@ def check_coverage(
                 f"{n_after} epoch(s) up to {float(toas_mjd.max()) - hi:.0f} d after "
                 f"it ends (MJD {hi:.1f})"
             )
-        warn(
+        message = (
             f"The {name} series does not cover every epoch it is evaluated at: "
             + ", and ".join(parts)
             + ". Those epochs are modelled with the value held flat at the nearest "
             "endpoint. Extend the series to cover them."
         )
+        if limits == "error":
+            raise ValueError(message)
+        warn(message)
     return n_before, n_after

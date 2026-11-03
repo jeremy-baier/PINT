@@ -17,6 +17,7 @@ from pint.models.solar_wind_dispersion import (
     SolarWindDispersionX,
     SolarWindProxyRegression,
 )
+from pint.solar_indices import SolarIndexSeries, sfu
 import pint.utils
 from pinttestdata import datadir
 
@@ -721,7 +722,13 @@ def test_sw_proxy_print_par_round_trips():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         par_text = src.print_par()
-    for par in ("SWPRBETA0", "SWPRBETA1", "SWPRSMOOTH", "SWPRSOURCE"):
+    for par in (
+        "SWPRBETA0",
+        "SWPRBETA1",
+        "SWPRSMOOTH",
+        "SWPRSMOOTHKERNEL",
+        "SWPRSOURCE",
+    ):
         assert par in par_text, par
     assert "SWPRNORM" not in par_text
     assert "NE_SW" not in par_text
@@ -731,7 +738,11 @@ def test_sw_proxy_print_par_round_trips():
     for line in par_text.strip().splitlines():
         name, value = line.split()[0], line.split()[1]
         par = getattr(rebuilt, name)
-        par.value = value if name == "SWPRSOURCE" else float(value)
+        # SWPRSOURCE and SWPRSMOOTHKERNEL are named, not numeric
+        try:
+            par.value = float(value)
+        except ValueError:
+            par.value = value
     dst = rebuilt.components["SolarWindProxyRegression"]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
@@ -836,7 +847,7 @@ def _load_proxy(proxy_mjd, proxy_vals, smooth_days):
     comp = model.components["SolarWindProxyRegression"]
     comp.SWPRSMOOTH.value = smooth_days
     comp.set_proxy(proxy_mjd, proxy_vals)
-    return comp.smoothed_proxy()[1]
+    return comp.smoothed_proxy().values.value
 
 
 def test_sw_proxy_smoothing_window_is_in_days_not_samples():
@@ -873,7 +884,7 @@ def test_sw_proxy_smoothing_is_cadence_independent():
 
     ref = results[1.0]
     for cadence, curve in results.items():
-        # Residual differences are boxcar quantisation only: the window is
+        # Residual differences are window quantisation only: the window is
         # round(81/cadence) samples, so 90 d at monthly vs 81 d at daily.
         # 1 cm^-3 against a 100 cm^-3 cycle amplitude.
         assert np.allclose(curve, ref, atol=1.0), (
@@ -908,11 +919,14 @@ def test_sw_proxy_smoothing_follows_the_parameter_without_reloading():
     comp.set_proxy(mjd, vals)
 
     comp.SWPRSMOOTH.value = 0.0
-    assert np.allclose(comp.smoothed_proxy()[1], vals)
+    assert np.allclose(comp.smoothed_proxy().values.value, vals)
 
     comp.SWPRSMOOTH.value = 81.0
-    assert not np.allclose(comp.smoothed_proxy()[1], vals)
-    assert np.allclose(comp.proxy_vals, vals)
+    assert not np.allclose(comp.smoothed_proxy().values.value, vals)
+    assert np.allclose(comp.proxy_vals.value, vals)
+    # the raw series is what is kept; smoothing is derived on demand
+    assert comp.proxy_series.smooth_days == 0.0
+    assert comp.smoothed_proxy().smooth_days == 81.0
 
 
 def test_sw_proxy_set_proxy_sorts_by_epoch():
@@ -927,7 +941,90 @@ def test_sw_proxy_set_proxy_sorts_by_epoch():
 
     assert np.all(np.diff(comp.proxy_mjd) > 0)
     assert np.allclose(comp.proxy_mjd, mjd)
-    assert np.allclose(comp.proxy_vals, vals)
+    assert np.allclose(comp.proxy_vals.value, vals)
+
+
+def test_sw_proxy_reaches_the_fit_as_bare_magnitudes():
+    """The proxy must lose its unit at the model boundary, deliberately.
+
+    ``SWPRBETA1`` is declared in cm^-3 but is physically cm^-3 per proxy unit, and
+    a PINT parameter cannot carry a unit that depends on ``SWPRSOURCE``. If
+    get_proxy_at_toas returned a Quantity, ``SWPRBETA1 * P`` would come out in
+    cm^-3 sfu and every derivative would be wrong. The series keeps the unit; the
+    evaluation hands over magnitudes.
+    """
+    model, toas, mjd, vals = _proxy_model()
+    comp = model.components["SolarWindProxyRegression"]
+
+    assert comp.proxy_series.unit == u.dimensionless_unscaled  # set from plain arrays
+    assert not isinstance(comp.get_proxy_at_toas(toas), u.Quantity)
+    assert comp.sw_proxy_ne(toas).unit == u.cm**-3
+    assert comp.solar_wind_dm(toas).unit.is_equivalent(u.pc / u.cm**3)
+    assert comp.get_mean_ne(toas).unit == u.cm**-3
+
+
+def test_sw_proxy_smoothing_kernel_comes_from_the_par_file():
+    """Which smoothing function is applied is part of the model, not of the script."""
+    model, toas, mjd, vals = _proxy_model()
+    comp = model.components["SolarWindProxyRegression"]
+
+    assert comp.SWPRSMOOTHKERNEL.value == "moving_average"
+    running = comp.smoothed_proxy()
+    assert running.smooth_kernel == "moving_average"
+    assert running.smooth_days == comp.SWPRSMOOTH.value
+
+    # switching the kernel re-smooths from the raw series rather than the cache
+    comp.SWPRSMOOTHKERNEL.value = "gaussian"
+    gaussian = comp.smoothed_proxy()
+    assert gaussian.smooth_kernel == "gaussian"
+    assert not np.allclose(running.values.value, gaussian.values.value)
+    assert comp.proxy_series.smooth_days == 0.0  # the stored series stays raw
+
+    # and it moves the model, so it had better be in the par file
+    dm_gaussian = comp.solar_wind_dm(toas).value
+    comp.SWPRSMOOTHKERNEL.value = "moving_average"
+    assert not np.allclose(dm_gaussian, comp.solar_wind_dm(toas).value)
+
+    comp.SWPRSMOOTHKERNEL.value = "lanczos"
+    with pytest.raises(ValueError, match="not a known smoothing kernel"):
+        model.validate()
+
+
+def test_sw_proxy_set_proxy_takes_an_explicit_unit():
+    """The series can be labelled, and a wrong label is caught rather than carried."""
+    model = get_model(StringIO(_PROXY_PAR))
+    model.add_component(SolarWindProxyRegression())
+    comp = model.components["SolarWindProxyRegression"]
+    mjd, vals = _make_proxy()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        comp.set_proxy(mjd, vals, unit=sfu)
+    assert comp.proxy_series.unit == sfu
+    assert comp.proxy_series.get_metadata()["unit"] == "sfu"
+
+    # already a Quantity: the unit is converted to, not overwritten
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        comp.set_proxy(mjd, vals * 1e4 * u.Jy, unit=sfu)
+    assert comp.proxy_series.unit == sfu
+    assert_allclose(comp.proxy_series.values.value, vals, rtol=1e-12)
+
+    # and an incompatible label is an error rather than a silent rescaling
+    with pytest.raises(u.UnitConversionError):
+        comp.set_proxy(mjd, vals * u.cm**-3, unit=sfu)
+
+
+def test_sw_proxy_smoothed_proxy_returns_a_series():
+    """One object carries the epochs, the values and their unit."""
+    model, toas, mjd, vals = _proxy_model()
+    comp = model.components["SolarWindProxyRegression"]
+    smoothed = comp.smoothed_proxy()
+    assert isinstance(smoothed, SolarIndexSeries)
+    assert len(smoothed) == len(mjd)
+    assert smoothed.smooth_days == comp.SWPRSMOOTH.value
+    # the component holds the raw series, not the smoothed one
+    assert comp.proxy_series.smooth_days == 0.0
 
 
 def test_sw_proxy_set_proxy_rejects_mismatched_shapes():
@@ -953,6 +1050,7 @@ def test_sw_proxy_is_selected_by_the_model_builder():
     assert model.SWPRBETA1.value == 0.0695
     assert model.SWPRSOURCE.value == "f107"
     # Lazily: nothing is loaded by building the model.
+    assert model.components["SolarWindProxyRegression"].proxy_series is None
     assert model.components["SolarWindProxyRegression"].proxy_mjd is None
 
     # Registering it must not change what a conventional par file builds.

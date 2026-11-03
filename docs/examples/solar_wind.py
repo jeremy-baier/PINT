@@ -276,7 +276,8 @@ print(
 # | `SWPRBETA0` | cm$^{-3}$ | intercept, the density at zero proxy flux |
 # | `SWPRBETA1` | cm$^{-3}$ per proxy unit | slope |
 # | `SWPRLAG` | day | lag applied to the proxy before interpolation |
-# | `SWPRSMOOTH` | day | boxcar width applied to the proxy, default 81 |
+# | `SWPRSMOOTH` | day | width of the smoothing applied to the proxy, default 81 |
+# | `SWPRSMOOTHKERNEL` | - | which smoothing function, a key of `pint.solar_indices.SMOOTHING_KERNELS` |
 # | `SWPRSOURCE` | - | which series to use, a key of `pint.solar_indices.SOURCES` |
 # | `SWM`, `SWP` | - | geometry, same meaning as in the standard model |
 #
@@ -322,6 +323,10 @@ print(
 # | `ssn` | international sunspot number, [NOAA SWPC](https://services.swpc.noaa.gov/json/solar-cycle/) | monthly |
 # | `ace_density` | in-situ proton density, [ACE SWEPAM](https://izw1.caltech.edu/ACE/ASC/level2/) | daily, manual export |
 #
+# `get_series` returns a `SolarIndexSeries`: the epochs as an `astropy.time.Time`, the
+# values as an `astropy.units.Quantity`, and the meta-data of the file it read, with
+# interpolation, bounds checking and smoothing as methods.
+#
 # Resolution goes through two tiers, the same way clock files do: an explicit `path=` or a
 # directory in `$PINT_SOLAR_INDICES`, then the cached download. The first tier is what
 # pins an analysis, since the content at a fixed URL changes as new data arrive. Nothing
@@ -337,14 +342,23 @@ print(
 # default of 81 is the conventional F10.7A window, three synodic solar rotations, which
 # averages over the rotation of active regions across the disc while leaving the solar
 # cycle in the data.
+#
+# `SWPRSMOOTHKERNEL` names the smoothing function itself. The default `moving_average`
+# weights every sample in the window equally, which is what the conventional F10.7A is;
+# `gaussian` weights them by a Gaussian whose full width at half maximum is
+# `SWPRSMOOTH`. Both are entries in `pint.solar_indices.SMOOTHING_KERNELS`, so another
+# kernel can be added there and selected by name. Both parameters go in the par file,
+# because `SWPRBETA1` is defined against the smoothed proxy and changing either redefines
+# it.
 
 # %%
 try:
-    f107_mjd, f107 = solar_indices.get_series("f107")
-    print(
-        f"{len(f107_mjd)} daily samples, MJD {f107_mjd.min():.0f} to "
-        f"{f107_mjd.max():.0f}, mean {f107.mean():.1f} sfu"
-    )
+    f107 = solar_indices.get_series("f107")
+    print(f107)
+    print(f"mean {f107.values.mean():.1f}, cadence {f107.cadence_days:.0f} d")
+    # what a reproducible result records about its input
+    for key in ("url", "retrieved", "sha256"):
+        print(f"  {key}: {f107.get_metadata()[key]}")
 except OSError as e:
     print(
         f"could not reach the DRAO table ({e}); the rest of this example uses a "
@@ -390,15 +404,17 @@ toas = make_fake_toas_uniform(
 mjds = toas.get_mjds().value
 fig, (ax, axdm) = plt.subplots(2, 1, figsize=(16, 9), sharex=True)
 ax.plot(proxy_mjd, proxy_vals, color="0.7", label="proxy P(t)")
+smoothed = proxy_component.smoothed_proxy()
 ax.plot(
-    *proxy_component.smoothed_proxy(),
+    smoothed.mjd,
+    smoothed.values,
     color="C3",
     label=f"smoothed, SWPRSMOOTH = {model_proxy.SWPRSMOOTH.value:.0f} d",
 )
 ax.set_xlim(mjds.min(), mjds.max())
 ax.set_ylabel("proxy [sfu]")
 ax.legend()
-axdm.plot(mjds, proxy_component.total_ne(toas), ".", label="$n_E(t)$ [cm$^{-3}$]")
+axdm.plot(mjds, proxy_component.sw_proxy_ne(toas), ".", label="$n_E(t)$ [cm$^{-3}$]")
 axdm.plot(
     mjds,
     1e4 * proxy_component.solar_wind_dm(toas).value,
@@ -419,7 +435,7 @@ axdm.legend()
 # `SWPRBETA0` and `SWPRBETA1` are strongly anticorrelated, so quite different pairs of
 # values give very similar `n_E(t)` series. Rather than looking at the values of these
 # parameters (which are proxy source dependent as well) it is often more useful to look at
-# `get_mean_ne()` and `total_ne()`, which have a more direct physical interpretation.
+# `get_mean_ne()` and `sw_proxy_ne()`, which have a more direct physical interpretation.
 
 # %%
 model_fit = get_model(StringIO(proxy_par))
