@@ -45,7 +45,8 @@ class Chromatic(DelayComponent):
         """
         if fref is None:
             fref = self._parent["CM_FREF"].quantity
-        cmdelay = cm * DMconst * (freq / fref) ** (-alpha)
+        fratio = (freq / fref).to_value(u.dimensionless_unscaled)
+        cmdelay = cm * DMconst * fratio ** (-alpha)
         return cmdelay.to(u.s)
 
     def chromatic_type_delay(self, toas: TOAs) -> u.Quantity:
@@ -109,7 +110,8 @@ class Chromatic(DelayComponent):
         for df in self.cm_deriv_funcs[param_name]:
             d_cm_d_cmparam += df(toas, param_name)
 
-        return DMconst * d_cm_d_cmparam * (bfreq / fref) ** (-alpha)
+        fratio = (bfreq / fref).to_value(u.dimensionless_unscaled)
+        return DMconst * d_cm_d_cmparam * fratio ** (-alpha)
 
     def register_cm_deriv_funcs(self, func: Callable, param: str) -> None:
         """Register the derivative function in to the deriv_func dictionaries.

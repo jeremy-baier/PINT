@@ -184,6 +184,24 @@ def test_cm_fref_delay_scaling(fref):
     assert np.allclose(delay.to_value(u.s), expected.to_value(u.s))
 
 
+def test_chromatic_time_delay_mixed_frequency_units():
+    """The frequency ratio is made dimensionless, so freq and fref may use
+    different (compatible) units; incompatible units raise."""
+    m = get_model(StringIO("F0 100 1\nCM 0.01\nTNCHROMIDX 4\n"))
+    comp = m.components["ChromaticCM"]
+    freqs = np.array([800.0, 1400.0, 2000.0]) * u.MHz
+
+    d_mhz = comp.chromatic_time_delay(m.CM.quantity, 4.0, freqs, 1400 * u.MHz)
+    d_ghz = comp.chromatic_time_delay(m.CM.quantity, 4.0, freqs.to(u.GHz), 1.4 * u.GHz)
+    d_mix = comp.chromatic_time_delay(m.CM.quantity, 4.0, freqs.to(u.GHz), 1400 * u.MHz)
+
+    assert d_mhz.unit == u.s
+    assert np.allclose(d_ghz.to_value(u.s), d_mhz.to_value(u.s))
+    assert np.allclose(d_mix.to_value(u.s), d_mhz.to_value(u.s))
+    with pytest.raises(u.UnitConversionError):
+        comp.chromatic_time_delay(m.CM.quantity, 4.0, freqs, 1 * u.s)
+
+
 def test_cm_fref_rescales_delay():
     """Halving CM_FREF scales the delay by (1/2)**TNCHROMIDX."""
     par = """
