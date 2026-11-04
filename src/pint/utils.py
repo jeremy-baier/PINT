@@ -3224,9 +3224,6 @@ def _get_wx2pl_lnlike(
         )
         f0 = np.min(fs)
 
-    # Amplitudes are converted to delays at the reference frequency of the corresponding
-    # power-law noise basis: the default DMNOISE_FREF (1400 MHz) for DMWaveX and the
-    # default CHROMNOISE_FREF (1400 MHz) for CMWaveX.
     scaling_factor = (
         1
         if component_name == "WaveX"

@@ -523,6 +523,12 @@ class PLDMNoise(CorrelatedNoiseComponent):
     variations will scale with the inverse of the square of the (Earth Doppler
     corrected) radio frequency.
 
+    The noise basis is scaled by ``(DMNOISE_FREF / f)**2``, where f is the radio
+    frequency, so TNDMAMP is the amplitude of the DM noise delays at the
+    reference radio frequency DMNOISE_FREF (1400 MHz by default). DMNOISE_FREF
+    should not be confused with the reference Fourier frequency (1/yr) at which
+    the power-law amplitude is defined.
+
     Parameters supported:
 
     .. paramtable::
@@ -606,7 +612,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
                 units=u.MHz,
                 value=1400.0,
                 frozen=True,
-                description="Reference frequency of the DM noise amplitude",
+                description="Reference radio frequency of the DM noise amplitude",
                 convert_tcb2tdb=False,
             )
         )
@@ -876,6 +882,12 @@ class PLChromNoise(CorrelatedNoiseComponent):
     it has been often modeled using a delay that is proportional to f^-alpha where alpha
     is known as the chromatic index.
 
+    The noise basis is scaled by ``(CHROMNOISE_FREF / f)**TNCHROMIDX``, where f
+    is the radio frequency, so TNCHROMAMP is the amplitude of the chromatic noise
+    delays at the reference radio frequency CHROMNOISE_FREF (1400 MHz by
+    default). CHROMNOISE_FREF should not be confused with the reference Fourier
+    frequency (1/yr) at which the power-law amplitude is defined.
+
     This model should be used in combination with the ChromaticCM model.
 
     Parameters supported:
@@ -961,7 +973,7 @@ class PLChromNoise(CorrelatedNoiseComponent):
                 units=u.MHz,
                 value=1400.0,
                 frozen=True,
-                description="Reference frequency of the chromatic noise amplitude",
+                description="Reference radio frequency of the chromatic noise amplitude",
                 convert_tcb2tdb=False,
             )
         )

@@ -183,7 +183,7 @@ def test_PLRedNoise_recovery():
 
 
 def test_PLChromNoise_CHROMNOISE_FREF_default():
-    """CHROMNOISE_FREF defaults to 1400 MHz, is frozen, and round-trips through a par file."""
+    """CHROMNOISE_FREF defaults to 1400 MHz, is frozen, and is preserved when written to a par file."""
     par = """
         PSRJ J1234+5678
         ELAT 0

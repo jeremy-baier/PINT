@@ -175,7 +175,7 @@ def test_PLRedNoise_recovery():
 
 
 def test_PLDMNoise_DMNOISE_FREF_default():
-    """DMNOISE_FREF defaults to 1400 MHz, is frozen, and round-trips through a par file."""
+    """DMNOISE_FREF defaults to 1400 MHz, is frozen, and is preserved when written to a par file."""
     model = get_model(io.StringIO(parfile_contents))
 
     assert model.DMNOISE_FREF.quantity == 1400 * u.MHz
