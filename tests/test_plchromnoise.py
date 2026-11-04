@@ -182,8 +182,33 @@ def test_PLRedNoise_recovery():
     assert np.all(np.isclose(rs_diff, 0, atol=1e-6))
 
 
-def test_PLChromNoise_basis_uses_CM_FREF():
-    """The chromatic noise basis is scaled by (CM_FREF/f)**TNCHROMIDX."""
+def test_PLChromNoise_CHROMNOISE_FREF_default():
+    """CHROMNOISE_FREF defaults to 1400 MHz, is frozen, and round-trips through a par file."""
+    par = """
+        PSRJ J1234+5678
+        ELAT 0
+        ELONG 0
+        F0 1
+        PEPOCH 58000
+        DM 10
+        CM 0
+        TNCHROMIDX 4
+        TNCHROMAMP -13
+        TNCHROMGAM 3
+        TNCHROMC 5
+    """
+    model = get_model(io.StringIO(par))
+
+    assert model.CHROMNOISE_FREF.quantity == 1400 * u.MHz
+    assert model.CHROMNOISE_FREF.frozen
+    assert "CHROMNOISE_FREF" in str(model)
+
+    model2 = get_model(io.StringIO(str(model)))
+    assert model2.CHROMNOISE_FREF.quantity == model.CHROMNOISE_FREF.quantity
+
+
+def test_PLChromNoise_basis_independent_of_CM_FREF():
+    """The chromatic noise basis depends on CHROMNOISE_FREF, not on CM_FREF."""
     par = """
         PSRJ J1234+5678
         ELAT 0
@@ -197,6 +222,35 @@ def test_PLChromNoise_basis_uses_CM_FREF():
         TNCHROMGAM 3
         TNCHROMC 5
         CM_FREF {fref}
+    """
+    mjds = np.linspace(57000, 58000, 40)
+    freqs = np.tile([500.0, 1400.0, 2000.0], 40)[:40] * u.MHz
+
+    model = get_model(io.StringIO(par.format(fref=1)))
+    toas = make_fake_toas_fromMJDs(mjds, model=model, freq=freqs)
+    model2 = get_model(io.StringIO(par.format(fref=800)))
+
+    basis = model.components["PLChromNoise"].get_noise_basis(toas)
+    basis2 = model2.components["PLChromNoise"].get_noise_basis(toas)
+
+    assert np.allclose(basis, basis2)
+
+
+def test_PLChromNoise_basis_uses_CHROMNOISE_FREF():
+    """The chromatic noise basis is scaled by (CHROMNOISE_FREF/f)**TNCHROMIDX."""
+    par = """
+        PSRJ J1234+5678
+        ELAT 0
+        ELONG 0
+        F0 1
+        PEPOCH 58000
+        DM 10
+        CM 0
+        TNCHROMIDX 4
+        TNCHROMAMP -13
+        TNCHROMGAM 3
+        TNCHROMC 5
+        CHROMNOISE_FREF {fref}
     """
     mjds = np.linspace(57000, 58000, 40)
     freqs = np.tile([500.0, 1400.0, 2000.0], 40)[:40] * u.MHz

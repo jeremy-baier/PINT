@@ -129,7 +129,7 @@ def test_cm_dm_comparison():
 
 
 def test_cm_fref_default():
-    """CM_FREF defaults to 1400 MHz and is written to the par file."""
+    """CM_FREF defaults to 1 MHz and is written to the par file."""
     par = """
         F0 100 1
         CM 0.01
@@ -137,7 +137,7 @@ def test_cm_fref_default():
     m = get_model(StringIO(par))
 
     assert "CM_FREF" in m
-    assert m.CM_FREF.quantity == 1400 * u.MHz
+    assert m.CM_FREF.quantity == 1 * u.MHz
     assert m.CM_FREF.frozen
     assert "CM_FREF" in str(m)
 
@@ -155,7 +155,7 @@ def test_cm_fref_from_parfile():
     assert m.CM_FREF.quantity == 800 * u.MHz
 
 
-@pytest.mark.parametrize("fref", [800.0, 1400.0, 2000.0])
+@pytest.mark.parametrize("fref", [1.0, 800.0, 1400.0, 2000.0])
 def test_cm_fref_delay_scaling(fref):
     """The delay is CM * DMconst * (freq / CM_FREF)**(-TNCHROMIDX)."""
     from pint import DMconst
@@ -212,9 +212,10 @@ def test_cm_fref_rescales_delay():
         PEPOCH 55000
         CM 0.01
         TNCHROMIDX 4
+        CM_FREF {fref}
     """
-    m1 = get_model(StringIO(par))
-    m2 = get_model(StringIO(par + "\n        CM_FREF 700\n"))
+    m1 = get_model(StringIO(par.format(fref=1400)))
+    m2 = get_model(StringIO(par.format(fref=700)))
     t = make_fake_toas_uniform(55000, 55500, 8, m1, freq=1400 * u.MHz)
 
     d1 = m1.components["ChromaticCM"].constant_chromatic_delay(t)

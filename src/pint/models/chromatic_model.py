@@ -141,10 +141,8 @@ class ChromaticCM(Chromatic):
     can also be used for a constant CM.
 
     The delay is ``CM * DMconst * (freq / CM_FREF)**(-TNCHROMIDX)``, i.e. CM is
-    the chromatic measure at the reference frequency CM_FREF (1400 MHz by
-    default). Note that CM_FREF was previously fixed at 1 MHz; CM values from
-    par files written before CM_FREF was introduced must be divided by
-    ``CM_FREF**TNCHROMIDX`` (with CM_FREF in MHz) to describe the same delay.
+    the chromatic measure at the reference frequency CM_FREF (1 MHz by
+    default).
 
     Fitting for the chromatic index is not supported because the fit is too
     unstable when fit simultaneously with the DM.
@@ -204,7 +202,7 @@ class ChromaticCM(Chromatic):
             floatParameter(
                 name="CM_FREF",
                 units=u.MHz,
-                value=1400.0,
+                value=1.0,
                 frozen=True,
                 description="Reference frequency of the chromatic measure",
                 long_double=True,
@@ -241,8 +239,8 @@ class ChromaticCM(Chromatic):
                     "CMEPOCH",
                     "CMEPOCH or PEPOCH is required if CM1 or higher are set",
                 )
-        if not self.CM_FREF.value:
-            raise ValueError("CM_FREF cannot be set to 0")
+        if self.CM_FREF.value <= 0:
+            raise ValueError("CM_FREF must be positive")
 
     def CM_derivative_unit(self, n: int) -> str:
         return f"pc cm^-3 MHz^-2 / yr^{n:d}" if n else "pc cm^-3 MHz^-2"
