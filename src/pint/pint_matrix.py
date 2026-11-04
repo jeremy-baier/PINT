@@ -449,7 +449,8 @@ class PhaseDesignMatrixMaker(DesignMatrixMaker):
         M = np.zeros((data.ntoas, len(params)))
         labels = [{self.derivative_quantity: (0, M.shape[0], self.quantity_unit)}]
         labels_dim2 = {}
-        delay = model.delay(data)
+        chain = model.delay_deriv_chain(data)
+        delay = chain.total_delay
         for ii, param in enumerate(params):
             if param == "Offset":
                 M[:, ii] = offset_padding
@@ -457,7 +458,9 @@ class PhaseDesignMatrixMaker(DesignMatrixMaker):
             else:
                 param_unit = getattr(model, param).units
                 # Since this is the phase derivative, we know the quantity unit.
-                q = deriv_func(data, delay, param).to(u.Unit("") / param_unit)
+                q = deriv_func(data, delay, param, chain=chain).to(
+                    u.Unit("") / param_unit
+                )
 
                 # NOTE Here we have negative sign here. Since in pulsar timing
                 # the residuals are calculated as (Phase - int(Phase)), which is different
@@ -837,7 +840,7 @@ class CovarianceMatrixMaker:
 
 
 def combine_covariance_matrix(covariance_matrices, crossterm={}, crossterm_padding=0.0):
-    """A fast method to combine two covariance matrix diagonaly.
+    """A fast method to combine two covariance matrix diagonally.
 
     Parameters
     ----------
@@ -845,9 +848,9 @@ def combine_covariance_matrix(covariance_matrices, crossterm={}, crossterm_paddi
         The design matrices needs to combine.
     crossterm : dictionary, optional
         The padding matrix of the cross area of two type of covariance matrices.
-        The input formate is {(label1, label2): numpy.ndarray}. Default is {}.
+        The input format is {(label1, label2): numpy.ndarray}. Default is {}.
     crossterm_padding : float
-        If the corss term is not give, use the given padding number. Default is
+        If the cross term is not given, use the given padding number. Default is
         0.0.
     """
     new_size = 0

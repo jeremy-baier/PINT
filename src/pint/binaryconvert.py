@@ -7,7 +7,7 @@ Potential issues:
 """
 
 import copy
-from typing import List, Optional, Tuple, Union
+from typing import Tuple
 
 import numpy as np
 from astropy import units as u
@@ -38,8 +38,8 @@ def _M2SINI_to_orthometric(model: pint.models.TimingModel) -> Tuple[u.Quantity]:
 
     Note that both STIGMA and H4 should not be used
 
-    Paramters
-    ---------
+    Parameters
+    ----------
     model : pint.models.timing_model.TimingModel
 
     Returns
@@ -88,8 +88,8 @@ def _orthometric_to_M2SINI(model: pint.models.TimingModel) -> Tuple[u.Quantity]:
     If STIGMA is present will use that.  Otherwise will use H4.
     If neither is present, will leave M2, SINI unset.
 
-    Paramters
-    ---------
+    Parameters
+    ----------
     model : pint.models.timing_model.TimingModel
 
     Returns
@@ -147,8 +147,8 @@ def _SINI_to_SHAPMAX(model: pint.models.TimingModel) -> Tuple[u.Quantity]:
 
     Also propagates uncertainties if present
 
-    Paramters
-    ---------
+    Parameters
+    ----------
     model : pint.models.timing_model.TimingModel
 
     Returns
@@ -169,8 +169,8 @@ def _SHAPMAX_to_SINI(model: pint.models.TimingModel) -> Tuple[u.Quantity]:
 
     Also propagates uncertainties if present
 
-    Paramters
-    ---------
+    Parameters
+    ----------
     model : pint.models.timing_model.TimingModel
 
     Returns
@@ -598,9 +598,16 @@ def convert_binary(
     if not model.is_binary:
         raise AttributeError("Input model is not a binary")
 
-    binary_component_name = [
+    binary_component_names = [
         x for x in model.components.keys() if x.startswith("Binary")
-    ][0]
+    ]
+    if len(binary_component_names) > 1:
+        raise ValueError(
+            "convert_binary does not support hierarchical triple systems "
+            f"with multiple binary components ({binary_component_names}); "
+            "convert each orbit separately or remove BINARY2 first."
+        )
+    binary_component_name = binary_component_names[0]
     binary_component = model.components[binary_component_name]
     if binary_component.binary_model_name == output:
         log.debug(
