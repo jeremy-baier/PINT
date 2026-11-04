@@ -14,8 +14,8 @@ the released changes.
 - ``PLDMNoise`` scales its Fourier basis by ``(DMNOISE_FREF/f)**2`` instead of a hard-coded 1400 MHz reference (unchanged for the default ``DMNOISE_FREF``).
 ### Added
 - Can output model comparison as JSON
-- ``CM_FREF``: reference frequency (MHz) of the chromatic measure, default 1 MHz, frozen by default.
-- ``CHROMNOISE_FREF``: reference frequency (MHz) of the ``PLChromNoise`` amplitude, default 1400 MHz, frozen by default.
-- ``DMNOISE_FREF``: reference frequency (MHz) of the ``PLDMNoise`` amplitude, default 1400 MHz, frozen by default.
+- ``CM_FREF``: reference frequency (MHz) of the chromatic measure, default 1 MHz.
+- ``CHROMNOISE_FREF``: reference frequency (MHz) of the ``PLChromNoise`` amplitude, default 1400 MHz.
+- ``DMNOISE_FREF``: reference frequency (MHz) of the ``PLDMNoise`` amplitude, default 1400 MHz.
 ### Fixed
 ### Removed
