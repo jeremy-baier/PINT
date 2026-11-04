@@ -16,7 +16,6 @@ def test_chromatic_cm():
     par = """
         F0 100 1
         CMEPOCH 55000
-        CM_FREF 1400 0
         CM 0.01
         CM1 0.001
         CM2 0.0001 
@@ -37,7 +36,6 @@ def test_chromatic_cm():
     with pytest.raises(MissingParameter):
         par = """
             F0 100 1
-            CM_FREF 1400 0
             CM 0.01
             CM1 0.001
             CM2 0.0001 
@@ -49,7 +47,6 @@ def test_change_cmepoch():
     par = """
         F0 100 1
         CMEPOCH 55000
-        CM_FREF 1400 0
         CM 0.01
         CM1 0.001
         CM2 0.0001 
@@ -78,8 +75,7 @@ def test_chromatic_cm_fit():
         DM      10 0
         CM      10 1
         CM1     0.001 1
-        TNCHROMIDX   4
-        CM_FREF 800 0
+        TNCHROMIDX   4 
         TZRSITE   gbt
         TZRMJD  55000
         TZRFRQ  500
@@ -110,22 +106,15 @@ def test_cm_dm_comparison():
     m1.remove_component("DispersionDM")
     m1.add_component(ChromaticCM())
     m1.TNCHROMIDX.value = 2
-    # CM is referenced to CM_FREF, so an alpha=2 chromatic measure equivalent to a
-    # dispersion measure is DM / CM_FREF**2
-    cm_scale = m1.CM_FREF.value**2
-    m1.CM.value = dmval / cm_scale
+    m1.CM.value = dmval
     m1.CM.frozen = False
 
     ftr = WLSFitter(t, m1)
     ftr.fit_toas(maxiter=3)
 
     assert ftr.resids.reduced_chi2 < 1.5
-    assert (
-        ftr.model.CM.value * cm_scale - m0.DM.value
-    ) / ftr.model.CM.uncertainty_value < 1.1
-    assert np.isclose(
-        ftr.model.CM.uncertainty_value * cm_scale, m0.DM.uncertainty_value, atol=0.1
-    )
+    assert (ftr.model.CM.value - m0.DM.value) / ftr.model.CM.uncertainty_value < 1.1
+    assert np.isclose(ftr.model.CM.uncertainty_value, m0.DM.uncertainty_value, atol=0.1)
 
 
 def test_cm_fref_default():
