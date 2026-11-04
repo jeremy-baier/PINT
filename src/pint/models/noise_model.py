@@ -602,7 +602,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
         )
         self.add_param(
             floatParameter(
-                name="DM_FREF",
+                name="DMNOISE_FREF",
                 units=u.MHz,
                 value=1400.0,
                 frozen=True,
@@ -656,7 +656,7 @@ class PLDMNoise(CorrelatedNoiseComponent):
         t, f = self.get_time_frequencies(toas)
         Fmat = create_fourier_design_matrix(t, f)
         freqs = self._parent.barycentric_radio_freq(toas).to(u.MHz)
-        fref = self.DM_FREF.quantity.to(u.MHz)
+        fref = self.DMNOISE_FREF.quantity.to(u.MHz)
         D = (fref.value / freqs.value) ** 2
 
         return Fmat * D[:, None]
@@ -677,10 +677,10 @@ class PLDMNoise(CorrelatedNoiseComponent):
 
         A Fourier design matrix contains the sine and cosine basis_functions
         in a Fourier series expansion. Here we scale the design matrix by
-        (fref/f)**2, where fref is the DM_FREF parameter (1400 MHz by default,
+        (fref/f)**2, where fref is the DMNOISE_FREF parameter (1400 MHz by default,
         matching the convention used in enterprise). TNDMAMP is the amplitude
-        of the DM noise delays at fref, so changing DM_FREF rescales TNDMAMP
-        by (DM_FREF/1400 MHz)**2.
+        of the DM noise delays at fref, so changing DMNOISE_FREF rescales TNDMAMP
+        by (DMNOISE_FREF/1400 MHz)**2.
 
         The weights used are the power-law PSD values at frequencies n/T,
         where n is in [1, TNDMC] and T is the total observing duration of

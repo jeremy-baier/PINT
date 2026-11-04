@@ -174,20 +174,20 @@ def test_PLRedNoise_recovery():
     assert np.all(np.isclose(rs_diff, 0, atol=1e-6))
 
 
-def test_PLDMNoise_DM_FREF_default():
-    """DM_FREF defaults to 1400 MHz, is frozen, and round-trips through a par file."""
+def test_PLDMNoise_DMNOISE_FREF_default():
+    """DMNOISE_FREF defaults to 1400 MHz, is frozen, and round-trips through a par file."""
     model = get_model(io.StringIO(parfile_contents))
 
-    assert model.DM_FREF.quantity == 1400 * u.MHz
-    assert model.DM_FREF.frozen
-    assert "DM_FREF" in str(model)
+    assert model.DMNOISE_FREF.quantity == 1400 * u.MHz
+    assert model.DMNOISE_FREF.frozen
+    assert "DMNOISE_FREF" in str(model)
 
     model2 = get_model(io.StringIO(str(model)))
-    assert model2.DM_FREF.quantity == model.DM_FREF.quantity
+    assert model2.DMNOISE_FREF.quantity == model.DMNOISE_FREF.quantity
 
 
-def test_PLDMNoise_basis_uses_DM_FREF():
-    """The DM noise basis is scaled by (DM_FREF/f)**2."""
+def test_PLDMNoise_basis_uses_DMNOISE_FREF():
+    """The DM noise basis is scaled by (DMNOISE_FREF/f)**2."""
     par = """
         PSRJ J1234+5678
         ELAT 0
@@ -198,7 +198,7 @@ def test_PLDMNoise_basis_uses_DM_FREF():
         TNDMAMP -13
         TNDMGAM 3
         TNDMC 5
-        DM_FREF {fref}
+        DMNOISE_FREF {fref}
     """
     mjds = np.linspace(57000, 58000, 40)
     freqs = np.tile([500.0, 1400.0, 2000.0], 40)[:40] * u.MHz
