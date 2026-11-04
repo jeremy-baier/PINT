@@ -205,7 +205,7 @@ class ChromaticCM(Chromatic):
                 value=1.0,
                 frozen=True,
                 description="Reference frequency of the chromatic measure",
-                long_double=True,
+                long_double=False,
                 convert_tcb2tdb=False,
             )
         )
