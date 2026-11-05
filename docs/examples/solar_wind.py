@@ -268,7 +268,7 @@ print(
 # $$n_E(t) = \mathrm{SWPRBETA0} + \mathrm{SWPRBETA1} \times P(t - \mathrm{SWPRLAG})$$
 #
 # with the usual geometry on top, $\mathrm{DM}_\mathrm{SW}(t) = n_E(t) S(t)$. Two free
-# parameters buy a density that moves with the solar cycle over a long data set, against one
+# parameters can model a density that moves with the solar cycle over a long data set, against one
 # for `NE_SW` and one per segment for `SWX`.
 #
 # | parameter | units | meaning |
@@ -281,12 +281,11 @@ print(
 # | `SWPRSOURCE` | - | which series to use, a key of `pint.solar_indices.SOURCES` |
 # | `SWM`, `SWP` | - | geometry, same meaning as in the standard model |
 #
-# The proxy enters in its own units, with no normalisation constant: `SWPRBETA1` is
-# cm$^{-3}$ per sfu for F10.7 and cm$^{-3}$ per sunspot for the sunspot number. That is
-# what makes the coefficients mean the same thing for every pulsar whatever its observing
-# span, and keeps them from being silently redefined when the proxy file grows. It does
-# mean that swapping in a series in different units rescales `SWPRBETA1`, which is why the
-# series is named in the par file.
+# Since each proxy has its own units and the proxies are not normalized, `SWPRBETA1` is
+# cm$^{-3}$ per sfu for F10.7 and cm$^{-3}$ per sunspot for the sunspot number.
+# This makes the coefficients mean the same thing for every pulsar whatever its observing
+# span, and keeps them from changing when the proxy file grows, but
+# it means that swapping in a series in different units rescales `SWPRBETA1`.
 #
 # This component shares `category = "solar_wind"` with the standard model, so a model
 # holds one or the other, never both: `SWPRBETA0` and `NE_SW` are exactly degenerate,
@@ -313,7 +312,7 @@ print(
 # %% [markdown]
 # ### Where the proxy series comes from
 #
-# `SWPRSOURCE` is resolved on first evaluation, by `pint.solar_indices`, so a bare
+# `SWPRSOURCE` is resolved on first evaluation, by `pint.solar_indices`, so
 # `get_model(par)` gives a model that evaluates with no further setup: the par file on its
 # own still specifies the model completely. The series are downloaded and cached:
 #
@@ -328,20 +327,15 @@ print(
 # interpolation, bounds checking and smoothing as methods.
 #
 # Resolution goes through two tiers, the same way clock files do: an explicit `path=` or a
-# directory in `$PINT_SOLAR_INDICES`, then the cached download. The first tier is what
-# pins an analysis, since the content at a fixed URL changes as new data arrive. Nothing
-# is bundled with PINT, since a snapshot of a product that grows every month is stale the
-# day it ships; when neither tier can supply a series, `set_proxy` below takes the arrays
-# directly, at the cost of a par file that no longer determines the model. Downloading, caching, expiration and failure handling are all done through
-# `pint.observatory.global_clock_corrections.get_file`, so `download_policy="never"` is
-# offline and deterministic, and a network error during a long run warns and falls back to
-# the cached copy rather than raising an error.
+# directory in `$PINT_SOLAR_INDICES`, then the cached download. `set_proxy` below takes input arrays
+# directly, but cannot write a par file that no longer determines the model.
+# Downloading, caching, expiration and failure handling are all done through
+# `pint.observatory.global_clock_corrections.get_file`.
 #
 # `SWPRSMOOTH` is in days and is converted to samples using the series' median cadence, so
 # 81 days means 81 samples of daily F10.7 and 3 samples of the monthly sunspot number. The
-# default of 81 is the conventional F10.7A window, three synodic solar rotations, which
-# averages over the rotation of active regions across the disc while leaving the solar
-# cycle in the data.
+# default of 81 is the conventional F10.7A window, about 3 rotations of the sun, which
+# averages over associated rotational structure while leaving the longer trends in the data.
 #
 # `SWPRSMOOTHKERNEL` names the kernel itself, an entry of
 # `pint.solar_indices.SMOOTHING_KERNELS`, built from
@@ -349,8 +343,6 @@ print(
 # `BOX` is an unweighted mean, `GAUSSIAN`, `TRIANGLE` and `HANN` are tapered, and
 # `TRAPEZOID` keeps a flat top over three quarters of the width. `SWPRSMOOTH` is the
 # full width at half maximum for all of them, so they are comparable at one width.
-# Both parameters go in the par file, because `SWPRBETA1` is defined against the
-# smoothed proxy and changing either one redefines it.
 
 # %%
 try:
@@ -371,8 +363,7 @@ except OSError as e:
 #
 # Smoothing is what separates the deterministic mean function from whatever stochastic
 # model is used alongside it. Unsmoothed daily F10.7 carries structure on the ~27 day
-# solar rotation, and putting that in the mean function has it compete with the noise
-# model rather than complement it.
+# solar rotation which is better modeled as a correlated noise process than a deterministic function.
 #
 # The kernel is applied with `boundary="extend"`, so the series is padded with its own
 # endpoint value. Within half a kernel of either end the smoothed value is partly an
@@ -430,14 +421,10 @@ else:
 # `SWPRBETA1` is comparable with a published value.
 #
 # The tapered kernels suppress the solar rotation more sharply at the same width,
-# because a flat window has sidelobes in frequency and a tapered one does not, and
-# they give up a little more of the cycle in exchange. The ordering on both counts is
-# `BOX`, `TRAPEZOID`, `TRIANGLE`, `HANN`, `GAUSSIAN`. Reach for one of them when the
-# frequency response matters more than matching the convention.
-#
-# The convention is per series, not universal: the published smoothing for the monthly
-# sunspot number is a tapered 13 month mean, a different filter, and it is not offered
-# here. `BOX` on `SSN` is a reasonable choice, but it is not what SIDC publishes.
+# because a flat window has sidelobes in frequency and a tapered one does not.
+
+# Note that the published smoothing for the monthly sunspot number is a tapered 13 month mean,
+# and it is not offered here, but `BOX` on `SSN` is a reasonable choice.
 
 # %% [markdown]
 # ### Using a series you already have
@@ -509,7 +496,7 @@ axdm.legend()
 # `SWPRBETA0` and `SWPRBETA1` are strongly anticorrelated, so quite different pairs of
 # values give very similar `n_E(t)` series. Rather than looking at the values of these
 # parameters (which are proxy source dependent as well) it is often more useful to look at
-# `get_mean_ne()` and `sw_proxy_ne()`, which have a more direct physical interpretation.
+# `get_mean_ne()` and `sw_proxy_ne()`, which have a direct physical interpretation.
 
 # %%
 model_fit = get_model(StringIO(proxy_par))

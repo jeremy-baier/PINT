@@ -1321,7 +1321,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     r"""Solar wind dispersion modelled as a regression on a solar-activity proxy.
 
     The electron density at 1 AU is a linear regression on an external proxy
-    observable such as the F10.7 cm radio flux or the sunspot number,
+    series such as the F10.7 cm radio flux or the sunspot number,
 
     .. math::
 
@@ -1335,20 +1335,17 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
         \mathrm{DM}_{\mathrm{SW}}(t) = n_E(t) \, S(t).
 
-    The proxy enters in its own units and there is no normalization of the proxy series.
-    So for a given proxy, and the same coefficients, the n_E(t) series is the same for
-    any pulsar at any point in time.
+    Each proxy has its own units and the model series is not normalized so different proxies
+    will yield different parameter values.
 
 
     Interpreting the coefficients
     -----------------------------
     ``SWPRBETA0`` and ``SWPRBETA1`` are strongly anticorrelated so their individual
     values can vary by a bit with only small impacts in the actual n_E(t) series.
-    That is geometry rather than bias, and the derived mean density is recovered at
-    full precision. Plot the actual n_E(t) series or look at :meth:`get_mean_ne`
-    for a physical interpretation.
+    Plot the actual n_E(t) series or look at :meth:`get_mean_ne` for a physical interpretation.
 
-    Positivity of the inferred solar wind density is **not** enforced. It is the
+    Note that positivity of the inferred solar wind density is not enforced. It is the
     joint condition :math:`\beta_0 + \beta_1 P(t) > 0`, which means that the model
     can be negative at times of low solar activity if the regression is poorly
     constrained.
@@ -1356,9 +1353,9 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     Resolving the proxy series
     --------------------------
     The series named by ``SWPRSOURCE`` is resolved on first evaluation, by
-    :func:`pint.solar_indices.get_series`, so a bare ``get_model(par)`` gives a model
+    :func:`pint.solar_indices.get_series`, so ``get_model(par)`` gives a model
     that evaluates with no further setup. :meth:`set_proxy` overrides that with arrays
-    held in memory, at the cost of serializability.
+    held in memory, but cannot be written to a par file and reloaded.
 
     Choosing the smoothing
     ----------------------
@@ -1367,11 +1364,8 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     the same quantity the literature means by smoothed F10.7.
 
     The other entries of :data:`~pint.solar_indices.SMOOTHING_KERNELS` taper, which
-    suppresses the solar rotation more sharply at the same width while giving up a
-    little more of the cycle. ``SWPRSMOOTH`` is the full width at half maximum for
-    every kernel, so changing only the name is a like-for-like comparison. Note the
-    convention is per series: the published one for the monthly sunspot number is a
-    tapered 13 month mean, which is a different filter and is not offered here.
+    suppresses the solar rotation more sharply at the same width while filtering a
+    little more of the solar cycle.
 
     Examples
     --------
@@ -1379,8 +1373,8 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     ``SWPRSOURCE F107``, ``SWPRSMOOTH 81`` and ``SWPRSMOOTHKERNEL BOX``. The series
     is fetched and cached on first use, so no further setup is needed::
 
-        >>> model = get_model("J1909-3744.par")              # doctest: +SKIP
-        >>> component = model.components["SolarWindProxyRegression"]  # doctest: +SKIP
+        >>> model = get_model("J1909-3744.par")
+        >>> component = model.components["SolarWindProxyRegression"]
         >>> ne = component.sw_proxy_ne(toas)                 # n_E(t) [cm^-3]
         >>> nbar = component.get_mean_ne(toas)               # the number to quote
 
@@ -1507,19 +1501,15 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
     @property
     def proxy_mjd(self) -> Optional[np.ndarray]:
-        """Epochs of the loaded proxy series as MJD, or None if none is loaded.
-
-        A view onto :attr:`proxy_series`; ``None`` is how a model built from a par
-        file reports that ``SWPRSOURCE`` has not been resolved yet.
-        """
+        """Epochs of the loaded proxy series as MJD, or None if none is loaded."""
         return None if self.proxy_series is None else self.proxy_series.mjd
 
     @property
     def proxy_vals(self) -> Optional[u.Quantity]:
         """Values of the loaded proxy series, or None if none is loaded.
 
-        The raw series, not the smoothed one: ``SWPRSMOOTH`` is applied at
-        evaluation time by :meth:`smoothed_proxy`.
+        This is the raw series, not the smoothed one.
+        ``SWPRSMOOTH`` is applied at evaluation time by :meth:`smoothed_proxy`.
         """
         return None if self.proxy_series is None else self.proxy_series.values
 
@@ -1534,28 +1524,14 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
         .. warning::
 
-           **A model loaded this way cannot be written to a par file or rebuilt
-           from one.** A par file can name a series through ``SWPRSOURCE``, but it
-           has nowhere to put several thousand numbers, so arrays passed here are
-           invisible to :meth:`print_par`. Writing the model out and reading it
-           back gives a *different* model: the reader resolves ``SWPRSOURCE``
-           instead and silently gets whatever that currently returns. Use this for
-           exploration and testing; for anything whose results are to be kept, set
+           A model loaded this way cannot be written to a par file or rebuilt
+           from one. Use this for exploration and testing. To save model, set
            ``SWPRSOURCE`` to a named series, or point ``$PINT_SOLAR_INDICES`` at a
            pinned file.
 
         The series is stored raw. Smoothing is applied at evaluation time from
-        ``SWPRSMOOTH`` and ``SWPRSMOOTHKERNEL``, so the par file alone determines it
-        and updating the series cannot silently redefine ``SWPRBETA1``.
+        ``SWPRSMOOTH`` and ``SWPRSMOOTHKERNEL``.
 
-        The unit travels with the series and is reported by
-        :meth:`~pint.solar_indices.SolarIndexSeries.get_metadata`, but it is
-        stripped again before the proxy reaches the fit, because ``SWPRBETA1`` is
-        declared in cm^-3 while it is physically cm^-3 per proxy unit and a PINT
-        parameter cannot carry a unit that depends on ``SWPRSOURCE``. See
-        :meth:`get_proxy_at_toas`. Labelling the series is therefore a check and a
-        record rather than something the arithmetic depends on, which is why a plain
-        array is still accepted.
 
         Parameters
         ----------
@@ -1604,9 +1580,8 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     ) -> None:
         """Load a :class:`~pint.solar_indices.SolarIndexSeries` directly.
 
-        This is the form the component works in internally: the series carries its
-        own units, epochs and metadata, so nothing else has to be passed alongside
-        it. :meth:`set_proxy` wraps bare arrays into one and
+        The series has its own units, epochs and metadata.
+        :meth:`set_proxy` wraps unitless arrays into one a series and
         :meth:`load_proxy_from_source` resolves one by name from ``SWPRSOURCE``.
 
         Parameters
@@ -1674,12 +1649,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         ``BOX``, an unweighted mean over the window, or ``GAUSSIAN``, weighted by a
         Gaussian of that full width at half maximum.
 
-        Both are par file parameters, so the smoothing is part of the model rather
-        than a choice made in the calling script. That matters because ``SWPRBETA1``
-        is defined against the smoothed proxy, so changing either one redefines it.
-
-        The result is cached against the width and kernel actually used, so changing
-        them takes effect without reloading or re-smoothing the series.
+        Changing the smooth parameters takes effect without reloading or re-smoothing the series.
         """
         if self.proxy_series is None:
             # Resolve SWPRSOURCE on first use rather than in setup()
@@ -1715,11 +1685,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         -----
         The magnitudes are stripped of their unit here. ``SWPRBETA1``
         is declared in cm^-3 while it is physically cm^-3 per proxy unit, because a
-        PINT parameter cannot carry a unit that depends on ``SWPRSOURCE``. Returning
-        a Quantity would make ``SWPRBETA1 * P`` come out in cm^-3 sfu and break
-        every derivative. The unit is still checked rather than discarded: a series
-        whose unit disagrees with the one in
-        :data:`~pint.solar_indices.SOURCES` warns on load.
+        PINT parameter cannot carry a unit that depends on ``SWPRSOURCE``.
         """
         if lag_days is None:
             lag_days = self.SWPRLAG.quantity.to_value(u.day)
@@ -1817,9 +1783,8 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                         + \mathrm{SWPRBETA1} \, \langle P \rangle
 
         ``SWPRBETA0`` and ``SWPRBETA1`` are highly anti-correlated, so their individual
-        uncertainties are inflated relative to the precision on the density itself,
-        while this combination is recovered at full precision. It is useful to compare
-        this mean value against ``NE_SW`` in :class:`SolarWindDispersion`.
+        uncertainties are inflated relative to the precision on the density itself.
+        It is useful to compare this mean value against ``NE_SW`` in :class:`SolarWindDispersion`.
         """
         return self.SWPRBETA0.quantity + self.SWPRBETA1.quantity * np.mean(
             self.get_proxy_at_toas(toas)

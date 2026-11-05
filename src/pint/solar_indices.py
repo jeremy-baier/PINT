@@ -149,16 +149,9 @@ def odd(n: float) -> int:
     return int(n) + 1 - int(n) % 2
 
 
-#: The kernels :meth:`SolarIndexSeries.smoothed` can apply, by name. Each entry builds
-#: an :class:`astropy.convolution.Kernel1D` whose full width at half maximum is the
-#: width in samples it is given, so one ``SWPRSMOOTH`` means the same window for every
-#: kernel. These names are what ``SWPRSMOOTHKERNEL`` can hold;
-#: :meth:`SolarIndexSeries.smoothed` also takes a kernel instance directly, for
-#: anything not listed here.
-#:
-#: ``box`` is the F10.7A convention and the right default for F10.7. The others taper,
-#: which removes the sidelobes a flat window has in frequency, ``gaussian`` most
-#: sharply. ``trapezoid`` keeps a flat top over three quarters of the width.
+# Each entry builds a kernel whose full width at half maximum is the width in samples
+# it is given, so one width means the same window for every kernel. These names are
+# what SWPRSMOOTHKERNEL can hold; see SolarIndexSeries.smoothed.
 SMOOTHING_KERNELS: Dict[str, Callable[[int], Kernel1D]] = {
     "box": Box1DKernel,
     "gaussian": lambda window: Gaussian1DKernel(window / FWHM_PER_SIGMA),
@@ -268,10 +261,10 @@ class SolarIndexSeries:
     Examples
     --------
     >>> from pint import solar_indices
-    >>> f107 = solar_indices.get_series("f107")       # doctest: +SKIP
-    >>> f107.values.unit                              # doctest: +SKIP
+    >>> f107 = solar_indices.get_series("f107")
+    >>> f107.values.unit
     Unit("sfu")
-    >>> f107.smoothed(81).evaluate([55000.0, 55100.0])  # doctest: +SKIP
+    >>> f107.smoothed(81).evaluate([55000.0, 55100.0])
     <Quantity [...] sfu>
     """
 
