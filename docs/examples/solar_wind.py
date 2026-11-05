@@ -277,7 +277,7 @@ print(
 # | `SWPRBETA1` | cm$^{-3}$ per proxy unit | slope |
 # | `SWPRLAG` | day | lag applied to the proxy before interpolation |
 # | `SWPRSMOOTH` | day | width of the smoothing applied to the proxy, default 81 |
-# | `SWPRSMOOTHKERNEL` | - | which smoothing function, a key of `pint.solar_indices.SMOOTHING_KERNELS` |
+# | `SWPRSMOOTHKERNEL` | - | which kernel, a key of `pint.solar_indices.SMOOTHING_KERNELS` (`BOX`, `GAUSSIAN`) |
 # | `SWPRSOURCE` | - | which series to use, a key of `pint.solar_indices.SOURCES` |
 # | `SWM`, `SWP` | - | geometry, same meaning as in the standard model |
 #
@@ -302,7 +302,7 @@ import astropy.units as u
 
 from pint import solar_indices
 
-proxy_par = "\n".join([par, "SWPRBETA0 2.0\nSWPRBETA1 0.05\nSWPRSOURCE f107"])
+proxy_par = "\n".join([par, "SWPRBETA0 2.0\nSWPRBETA1 0.05\nSWPRSOURCE F107"])
 model_proxy = get_model(StringIO(proxy_par))
 proxy_component = model_proxy.components["SolarWindProxyRegression"]
 print(
@@ -343,13 +343,13 @@ print(
 # averages over the rotation of active regions across the disc while leaving the solar
 # cycle in the data.
 #
-# `SWPRSMOOTHKERNEL` names the smoothing function itself. The default `moving_average`
-# weights every sample in the window equally, which is what the conventional F10.7A is;
-# `gaussian` weights them by a Gaussian whose full width at half maximum is
-# `SWPRSMOOTH`. Both are entries in `pint.solar_indices.SMOOTHING_KERNELS`, so another
-# kernel can be added there and selected by name. Both parameters go in the par file,
-# because `SWPRBETA1` is defined against the smoothed proxy and changing either redefines
-# it.
+# `SWPRSMOOTHKERNEL` names the kernel itself, an entry of
+# `pint.solar_indices.SMOOTHING_KERNELS`. The entries are
+# [astropy convolution kernels](https://docs.astropy.org/en/stable/convolution/):
+# `BOX` is `Box1DKernel`, an unweighted mean over the window, and `GAUSSIAN` is
+# `Gaussian1DKernel` with `SWPRSMOOTH` read as the full width at half maximum. Both
+# parameters go in the par file, because `SWPRBETA1` is defined against the smoothed
+# proxy and changing either one redefines it.
 
 # %%
 try:
@@ -364,6 +364,81 @@ except OSError as e:
         f"could not reach the DRAO table ({e}); the rest of this example uses a "
         "synthetic proxy"
     )
+
+# %% [markdown]
+# ### Choosing the smoothing
+#
+# Smoothing is what separates the deterministic mean function from whatever stochastic
+# model is used alongside it. Unsmoothed daily F10.7 carries structure on the ~27 day
+# solar rotation, and putting that in the mean function has it compete with the noise
+# model rather than complement it.
+#
+# The kernel is applied with `boundary="extend"`, so the series is padded with its own
+# endpoint value. Within half a kernel of either end the smoothed value is partly an
+# average of that padding, which matters at the start of a data set that begins before
+# the proxy record does.
+
+# %%
+print(
+    "kernels a par file can name:",
+    sorted(k.upper() for k in solar_indices.SMOOTHING_KERNELS),
+)
+print("any astropy Kernel1D also works from Python, but a par file cannot name it")
+
+if "f107" in dir():
+    widths = (27, 81, 365)
+    fig, axes = plt.subplots(2, 1, figsize=(16, 8))
+    spans = (
+        (f107.mjd.min(), f107.mjd.max(), "the whole record"),
+        (57500, 58230, "two years on the cycle-24 decline"),
+    )
+    for ax, (lo, hi, label) in zip(axes, spans):
+        inside = (f107.mjd >= lo) & (f107.mjd <= hi)
+        ax.plot(
+            f107.mjd[inside],
+            f107.values.value[inside],
+            color="0.8",
+            lw=0.7,
+            label="raw",
+        )
+        for width in widths:
+            box = f107.smoothed(width)
+            ax.plot(
+                box.mjd[inside],
+                box.values.value[inside],
+                lw=1.4,
+                label=f"BOX, {width} d",
+            )
+        gaussian = f107.smoothed(81, "gaussian")
+        ax.plot(
+            gaussian.mjd[inside],
+            gaussian.values.value[inside],
+            "k--",
+            lw=1.2,
+            label="GAUSSIAN, 81 d",
+        )
+        ax.set_xlim(lo, hi)
+        ax.set_ylabel(f"F10.7 [{f107.unit}]")
+        ax.set_title(label)
+        ax.legend(ncol=5, fontsize=9)
+    axes[-1].set_xlabel("MJD")
+    plt.tight_layout()
+else:
+    print("no series fetched above, so there is nothing to smooth here")
+
+# %% [markdown]
+# **Use the defaults for F10.7**: `SWPRSMOOTHKERNEL BOX` with `SWPRSMOOTH 81`. An
+# unweighted 81 day mean is the F10.7A convention, three synodic solar rotations, so the
+# smoothed proxy is the same quantity the literature means by smoothed F10.7, and
+# `SWPRBETA1` is comparable with a published value.
+#
+# `GAUSSIAN` at the same width suppresses the rotation more sharply, because a flat
+# window has sidelobes in frequency and a Gaussian does not. Reach for it when the
+# frequency response matters more than matching the convention.
+#
+# The convention is per series, not universal: the published smoothing for the monthly
+# sunspot number is a tapered 13 month mean, a different filter, and it is not offered
+# here. `BOX` on `SSN` is a reasonable choice, but it is not what SIDC publishes.
 
 # %% [markdown]
 # ### Using a series you already have

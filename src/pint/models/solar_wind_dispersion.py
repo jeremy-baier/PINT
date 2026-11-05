@@ -1360,6 +1360,27 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     that evaluates with no further setup. :meth:`set_proxy` overrides that with arrays
     held in memory, at the cost of serializability.
 
+    Choosing the smoothing
+    ----------------------
+    For F10.7, use the defaults: ``SWPRSMOOTHKERNEL BOX`` with ``SWPRSMOOTH 81``, an
+    unweighted 81 day mean. That is the F10.7A convention, so the smoothed proxy is
+    the same quantity the literature means by smoothed F10.7. ``GAUSSIAN`` suppresses
+    the solar rotation more sharply at the same width and is the better choice when
+    the frequency response matters more than matching the convention. Note the
+    convention is per series: the published one for the monthly sunspot number is a
+    tapered 13 month mean, which is a different filter and is not offered here.
+
+    Examples
+    --------
+    The F10.7 model with the recommended smoothing, from a par file carrying
+    ``SWPRSOURCE F107``, ``SWPRSMOOTH 81`` and ``SWPRSMOOTHKERNEL BOX``. The series
+    is fetched and cached on first use, so no further setup is needed::
+
+        >>> model = get_model("J1909-3744.par")              # doctest: +SKIP
+        >>> component = model.components["SolarWindProxyRegression"]  # doctest: +SKIP
+        >>> ne = component.sw_proxy_ne(toas)                 # n_E(t) [cm^-3]
+        >>> nbar = component.get_mean_ne(toas)               # the number to quote
+
     Parameters supported:
 
     .. paramtable::
@@ -1383,7 +1404,6 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     def __init__(self):
         super().__init__()
 
-        # Regression intercept. This is the density at zero proxy value.
         self.add_param(
             floatParameter(
                 name="SWPRBETA0",
@@ -1394,7 +1414,6 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 tcb2tdb_scale_factor=(const.c * DMconst),
             )
         )
-        # Regression slope, in cm^-3 per unit of the proxy (per sfu for F10.7).
         self.add_param(
             floatParameter(
                 name="SWPRBETA1",
@@ -1405,7 +1424,6 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 tcb2tdb_scale_factor=(const.c * DMconst),
             )
         )
-        # Optional time lag applied to the proxy before interpolation to TOA epochs.
         self.add_param(
             floatParameter(
                 name="SWPRLAG",
@@ -1422,27 +1440,27 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 value=81.0,
                 description="Width of the smoothing applied to the proxy [days], "
                 "interpreted by SWPRSMOOTHKERNEL; 81, three solar rotations, is "
-                "the conventional F10.7A window",
+                "the conventional F10.7A window and the recommended value",
                 tcb2tdb_scale_factor=u.Quantity(1),
             )
         )
         self.add_param(
             strParameter(
                 name="SWPRSMOOTHKERNEL",
-                value="moving_average",
-                description="Smoothing function applied to the proxy, a key of "
-                "pint.solar_indices.SMOOTHING_KERNELS (moving_average, gaussian)",
+                value="BOX",
+                description="Smoothing kernel applied to the proxy, a key of "
+                "pint.solar_indices.SMOOTHING_KERNELS (BOX, GAUSSIAN); BOX is the "
+                "F10.7A convention and the recommended choice",
             )
         )
         self.add_param(
             strParameter(
                 name="SWPRSOURCE",
-                value="f107",
+                value="F107",
                 description="Solar activity series to use, a key of "
-                "pint.solar_indices.SOURCES (e.g. f107, ssn)",
+                "pint.solar_indices.SOURCES (e.g. F107, SSN)",
             )
         )
-        # Geometry, same meaning as in SolarWindDispersion.
         self.add_param(
             floatParameter(
                 name="SWP",
@@ -1461,20 +1479,15 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             )
         )
 
-        # The raw series as supplied.  Smoothing is applied on demand from
-        # SWPRSMOOTH and cached, so changing the parameter changes the model without
-        # reloading the data.
+        # The raw series; smoothing is applied on demand and cached.
         self.proxy_series = None
         self.proxy_smoothed_cache = None
-        # True when the series came from raw arrays rather than a named source, in
-        # which case the model cannot be saved to file. See set_proxy().
+        # Set when the series came from arrays rather than SWPRSOURCE.
         self.proxy_is_ephemeral = False
 
         self.dm_value_funcs += [self.solar_wind_dm]
         self.delay_funcs_component += [self.solar_wind_delay]
         self.set_special_params(["SWPRBETA0", "SWPRBETA1", "SWPRSOURCE", "SWM", "SWP"])
-
-    # ── proxy data ────────────────────────────────────────────────────────────
 
     @property
     def proxy_mjd(self) -> Optional[np.ndarray]:
@@ -1549,8 +1562,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         had_unit = isinstance(proxy_vals, u.Quantity)
         proxy_vals = u.Quantity(proxy_vals)
         if unit is not None:
-            # A plain array is labelled; a Quantity is converted, which raises if the
-            # caller has labelled the series with an incompatible unit.
+            # A plain array is labelled; a Quantity is converted.
             proxy_vals = proxy_vals.to(unit) if had_unit else proxy_vals.value * unit
 
         if proxy_mjd.shape != proxy_vals.shape:
@@ -1559,8 +1571,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
                 f"{proxy_mjd.shape} and {proxy_vals.shape}."
             )
 
-        # Sort by epoch: the median cadence used for smoothing and the interpolation
-        # in SolarIndexSeries both require monotonically increasing MJDs.
+        # The median cadence and the interpolation both need increasing MJDs.
         order = np.argsort(proxy_mjd)
         self.set_proxy_series(
             solar_indices.SolarIndexSeries(
@@ -1628,12 +1639,11 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             Read this file instead of resolving the source. Note that a path is
             machine-specific and is not recorded in the par file.
         """
-        name = self.SWPRSOURCE.value
+        name = self.SWPRSOURCE.value.lower()
         series = solar_indices.get_series(
             name, download_policy=download_policy, path=path
         )
-        # An explicit path is machine-specific and is not recorded in the par file,
-        # so a model built this way cannot be written to file.
+        # A path is machine-specific and is not recorded in the par file.
         self.set_proxy_series(series, ephemeral=path is not None)
         log.info(f"Loaded {series!r}")
 
@@ -1643,11 +1653,10 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         Smoothing is :meth:`~pint.solar_indices.SolarIndexSeries.smoothed`. The
         width in days is converted to samples using the series median cadence, so
         the same ``SWPRSMOOTH`` means the same physical window whether the proxy is
-        daily or monthly, and ``SWPRSMOOTHKERNEL`` names which function of
+        daily or monthly, and ``SWPRSMOOTHKERNEL`` names which kernel of
         :data:`~pint.solar_indices.SMOOTHING_KERNELS` is applied: by default
-        ``"moving_average"``, a centred average weighting every sample in the window
-        equally, or ``"gaussian"``, weighted by a Gaussian of that full width at
-        half maximum.
+        ``BOX``, an unweighted mean over the window, or ``GAUSSIAN``, weighted by a
+        Gaussian of that full width at half maximum.
 
         Both are par file parameters, so the smoothing is part of the model rather
         than a choice made in the calling script. That matters because ``SWPRBETA1``
@@ -1659,7 +1668,10 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
         if self.proxy_series is None:
             # Resolve SWPRSOURCE on first use rather than in setup()
             self.load_proxy_from_source()
-        key = (float(self.SWPRSMOOTH.value or 0.0), self.SWPRSMOOTHKERNEL.value)
+        key = (
+            float(self.SWPRSMOOTH.value or 0.0),
+            self.SWPRSMOOTHKERNEL.value.lower(),
+        )
 
         if self.proxy_smoothed_cache is None or self.proxy_smoothed_cache[0] != key:
             self.proxy_smoothed_cache = (key, self.proxy_series.smoothed(*key))
@@ -1685,7 +1697,7 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
         Notes
         -----
-        The magnitudes are deliberately stripped of their unit here. ``SWPRBETA1``
+        The magnitudes are stripped of their unit here. ``SWPRBETA1``
         is declared in cm^-3 while it is physically cm^-3 per proxy unit, because a
         PINT parameter cannot carry a unit that depends on ``SWPRSOURCE``. Returning
         a Quantity would make ``SWPRBETA1 * P`` come out in cm^-3 sfu and break
@@ -1932,19 +1944,24 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
             raise ValueError(
                 f"Solar Dispersion Delay not implemented for SWM {self.SWM.value}"
             )
-        if self.SWPRSOURCE.value not in solar_indices.SOURCES:
+        # Par file values are upper case; the registries are keyed in lower case.
+        if self.SWPRSOURCE.value.lower() not in solar_indices.SOURCES:
             raise ValueError(
                 f"SWPRSOURCE={self.SWPRSOURCE.value!r} is not a known series; "
-                f"known: {sorted(solar_indices.SOURCES)}"
+                f"known: {sorted(name.upper() for name in solar_indices.SOURCES)}"
             )
-        if self.SWPRSMOOTHKERNEL.value not in solar_indices.SMOOTHING_KERNELS:
+        if self.SWPRSMOOTHKERNEL.value.lower() not in solar_indices.SMOOTHING_KERNELS:
             raise ValueError(
                 f"SWPRSMOOTHKERNEL={self.SWPRSMOOTHKERNEL.value!r} is not a known "
                 f"smoothing kernel; known: "
-                f"{sorted(solar_indices.SMOOTHING_KERNELS)}"
+                f"{sorted(k.upper() for k in solar_indices.SMOOTHING_KERNELS)}"
             )
 
     def print_par(self, format: Literal["tempo", "tempo2", "pint"] = "pint") -> str:
+        # A par file holds string values in upper case, as it does EPHEM.
+        for par in (self.SWPRSOURCE, self.SWPRSMOOTHKERNEL):
+            if par.value is not None:
+                par.value = par.value.upper()
         if self.proxy_is_ephemeral:
             warn(
                 "This model's proxy was supplied as arrays through set_proxy(), "

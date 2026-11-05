@@ -62,9 +62,6 @@ def ace(tmp_path):
     return p
 
 
-# epoch conventions
-
-
 def test_mjd_conventions():
     """MJD 0 is 1858-11-17 and the ACE epoch is 1996-01-01."""
     assert si.mjd_from_ymd("18581117") == 0
@@ -75,9 +72,8 @@ def test_mjd_conventions():
 def test_monthly_epoch_is_the_middle_of_the_month():
     """A monthly mean sits at the mid-point of its month, not on day 15.
 
-    It is the arithmetic mean of the daily values over the calendar month, so its
-    epoch is the mean of the days averaged: mjd0 + (N - 1) / 2 for an N-day month,
-    with daily epochs at 0h as the other parsers in this module produce them.
+    It is the mean of the daily values over the calendar month, so its epoch is
+    mjd0 + (N - 1) / 2 for an N-day month, with daily epochs at 0h.
     """
     # October has 31 days, so the mid-point is the 16th at 0h
     assert si.mjd_from_year_month("2004-10") == si.mjd_from_ymd("20041016")
@@ -86,17 +82,14 @@ def test_monthly_epoch_is_the_middle_of_the_month():
     # February: 29 days in a leap year, 28 otherwise
     assert si.mjd_from_year_month("2004-02") == si.mjd_from_ymd("20040215")
     assert si.mjd_from_year_month("2003-02") == si.mjd_from_ymd("20030214") + 0.5
-    # and day 15 flat would be early, which is the thing being avoided
     assert si.mjd_from_year_month("2004-10") - si.mjd_from_ymd("20041015") == 1.0
 
 
 def test_monthly_cadence_survives_the_exact_epochs():
     """Exact mid-month epochs are unevenly spaced; the median cadence must hold.
 
-    ``SWPRSMOOTH`` is converted to a sample count using the median cadence of the
-    series, so a monthly series has to keep reporting about 30 d. Consecutive
-    mid-points are half the sum of the two month lengths apart, so the spacing
-    runs 29.5 to 31 d rather than being constant.
+    Consecutive mid-points are half the sum of the two month lengths apart, so the
+    spacing is not constant.
     """
     mjd = np.array(
         [
@@ -108,9 +101,6 @@ def test_monthly_cadence_survives_the_exact_epochs():
     spacing = np.diff(mjd)
     assert 30.0 <= np.median(spacing) <= 31.0
     assert spacing.min() >= 29.5 and spacing.max() <= 31.0
-
-
-# DRAO
 
 
 def test_drao_averages_to_one_value_per_day(drao):
@@ -126,11 +116,8 @@ def test_drao_averages_to_one_value_per_day(drao):
 def test_drao_defaults_to_the_1au_adjusted_column(drao):
     """The default is fluxadjflux, not fluxobsflux.
 
-    fluxobsflux carries the Sun-Earth distance modulation, a 6.8% peak-to-peak
-    annual term measured on the real table. That lands on exactly the frequency a
-    solar wind signal occupies, so picking it up by accident would be invisible in
-    the fit and wrong. Asserting the two columns give different numbers is what
-    stops a silent swap.
+    fluxobsflux carries the Sun-Earth distance modulation, an annual term at the
+    frequency a solar wind signal occupies.
     """
     adj = si.parse_drao_f107(drao).values.value
     obs = si.parse_drao_f107(drao, column="fluxobsflux").values.value
@@ -151,32 +138,23 @@ def test_drao_rejects_a_file_without_the_header(tmp_path):
         si.parse_drao_f107(p)
 
 
-# NOAA
-
-
 def test_noaa_ssn_keeps_genuine_zeros(noaa):
     """A zero sunspot number is real data, not a sentinel.
 
-    The sunspot number is legitimately 0.0 at deep solar minimum, and the real NOAA
-    file carries 67 such rows. Filtering on positivity, which would be correct for a
-    flux, silently discards them. The filter has to be per quantity: -1.0 is
-    missing, 0.0 is a measurement.
+    The filter is per quantity: -1.0 is missing, 0.0 is a measurement.
     """
     series = si.parse_noaa_ssn(noaa)
     assert len(series) == 4  # every row survives, including the 0.0
     assert 0.0 in series.values.value
-    # a count is dimensionless, unlike the flux series
     assert series.unit == u.dimensionless_unscaled
-    # the -1.0 sentinel on a different key in the same rows is what gets dropped
     assert len(si.parse_noaa(noaa, "smoothed_ssn")) == 3
 
 
 def test_no_noaa_f107_source():
-    """NOAA F10.7 is deliberately not offered.
+    """NOAA F10.7 is not offered.
 
-    It is not an independent measurement: it is the monthly mean of the same
-    Penticton series, in the observed convention rather than adjusted to 1 AU, which
-    is the convention parse_drao_f107 exists to avoid.
+    It is the monthly mean of the same Penticton series, in the observed convention
+    rather than adjusted to 1 AU.
     """
     assert "f107_noaa" not in si.SOURCES
     assert not hasattr(si, "parse_noaa_f107")
@@ -185,9 +163,6 @@ def test_no_noaa_f107_source():
 
 def test_noaa_series_are_sorted(noaa):
     assert np.all(np.diff(si.parse_noaa_ssn(noaa).mjd) > 0)
-
-
-# ACE
 
 
 def test_ace_drops_the_missing_sentinel(ace):
@@ -203,9 +178,6 @@ def test_ace_rejects_a_file_without_density(tmp_path):
     p.write_text("fp_year ACEepoch proton_speed\n1998.0 0.0 400.0\n")
     with pytest.raises(ValueError, match="not an ACE export"):
         si.parse_ace_density(p)
-
-
-# resolution
 
 
 def test_get_series_with_an_explicit_path(drao):
@@ -228,25 +200,18 @@ def test_get_series_rejects_an_unknown_name():
 
 
 def test_ace_has_no_automatic_download():
-    """ACE is manual by design; the error has to say so rather than be cryptic.
+    """ACE is manual, and the error has to say so rather than be cryptic.
 
     The ACE Science Center publishes no plain-text bulk product carrying proton
-    density, only HDF4, so there is deliberately no URL for this source.
+    density, only HDF4, so there is no URL for this source.
     """
     assert si.SOURCES["ace_density"].url_base is None
     with pytest.raises(FileNotFoundError, match="no automatic download"):
         si.get_series("ace_density", download_policy="never")
 
 
-# the series object
-
-
 def test_series_carries_its_unit_rather_than_a_convention(drao):
-    """Units travel with the data instead of being described in a docstring.
-
-    The whole point of returning an object: a caller cannot pick up the values
-    without also picking up what they are measured in.
-    """
+    """Units travel with the data rather than being described in a docstring."""
     series = si.parse_drao_f107(drao)
     assert isinstance(series.values, u.Quantity)
     assert series.unit == si.sfu
@@ -277,11 +242,10 @@ def test_series_evaluate_holds_the_endpoints_or_refuses():
 
 
 def test_series_builds_its_time_lazily():
-    """``.time`` is deferred, and that is not just a micro-optimisation.
+    """``.time`` is deferred until something asks for it.
 
-    The sunspot record starts in 1749, where every UTC conversion draws an
-    ErfaWarning about a dubious year. Interpolation works from the MJD floats, so
-    the common path must not build a Time at all.
+    The sunspot record starts in 1749, where a UTC conversion draws an ErfaWarning.
+    Interpolation works from the MJD floats, so the common path builds no Time.
     """
     series = si.SolarIndexSeries([55000.0, 55010.0], [1.0, 2.0])
     assert series._time is None
@@ -297,57 +261,103 @@ def test_series_smoothing_is_derived_and_cadence_aware():
     assert daily.cadence_days == 1.0
     assert monthly.cadence_days == 30.0
 
-    # the raw series is untouched; smoothing returns a new one
     assert daily.smoothed(81).smooth_days == 81.0
     assert daily.smooth_days == 0.0
     assert daily.smoothed(81).unit == si.sfu
-    # narrower than one sample is a no-op rather than an error
     assert monthly.smoothed(7) is monthly
     assert daily.smoothed(0) is daily
 
 
 def test_series_smoothing_kernel_is_named_and_selectable():
-    """The smoothing function is a named entry in a registry, not a hidden choice."""
+    """The kernel is a named entry in a registry, not a hidden choice."""
     rng = np.random.default_rng(0)
     noisy = 100.0 + rng.normal(0.0, 10.0, 401)
     series = si.SolarIndexSeries(np.arange(401.0), noisy * si.sfu, name="synthetic")
 
-    assert set(si.SMOOTHING_KERNELS) >= {"moving_average", "gaussian"}
-    running = series.smoothed(81)
+    assert set(si.SMOOTHING_KERNELS) >= {"box", "gaussian"}
+    box = series.smoothed(81)
     gaussian = series.smoothed(81, kernel="gaussian")
 
-    # the default is the moving average, and each records which one it was
-    assert running.smooth_kernel == "moving_average"
+    assert box.smooth_kernel == "box"
     assert gaussian.smooth_kernel == "gaussian"
-    assert_allclose(
-        series.smoothed(81, kernel="moving_average").values.value, running.values.value
-    )
-    assert "smoothed 81 d (moving_average)" in repr(running)
+    assert_allclose(series.smoothed(81, kernel="box").values.value, box.values.value)
+    assert "smoothed 81 d (box)" in repr(box)
     assert "smoothed 81 d (gaussian)" in repr(gaussian)
 
-    # both suppress the noise, but they are not the same function
-    for smoothed in (running, gaussian):
+    assert_allclose(series.smoothed(81, kernel="BOX").values.value, box.values.value)
+    assert series.smoothed(81, kernel="GAUSSIAN").smooth_kernel == "gaussian"
+
+    for smoothed in (box, gaussian):
         assert smoothed.values.std() < series.values.std() / 3
         assert_allclose(
             smoothed.values.mean().value, series.values.mean().value, rtol=0.02
         )
-    assert not np.allclose(running.values.value, gaussian.values.value)
+    assert not np.allclose(box.values.value, gaussian.values.value)
 
     with pytest.raises(ValueError, match="Unknown smoothing kernel"):
         series.smoothed(81, kernel="lanczos")
 
 
-def test_series_moving_average_window_is_centred():
-    """An even sample count would put the smoothed series half a sample late."""
-    ramp = si.SolarIndexSeries(np.arange(201.0), np.arange(201.0) * si.sfu)
-    # a running mean of a straight line returns the line, away from the ends, only
-    # if the window is symmetric about the sample it is evaluated at
+def test_series_smoothing_window_is_centred():
+    """An asymmetric window would put the smoothed series half a sample late."""
+    ramp = si.SolarIndexSeries(np.arange(801.0), np.arange(801.0) * si.sfu)
+    # a straight line survives only a kernel symmetric about the sample it is
+    # evaluated at, which Box1DKernel is at even widths too
     for width in (10, 11, 50, 81):
-        smoothed = ramp.smoothed(width)
-        interior = slice(width, -width)
-        assert_allclose(
-            smoothed.values.value[interior], ramp.values.value[interior], atol=1e-9
-        )
+        for kernel in sorted(si.SMOOTHING_KERNELS):
+            # the Gaussian's support is several sigma, not one FWHM
+            margin = width if kernel == "box" else 4 * width
+            smoothed = ramp.smoothed(width, kernel)
+            interior = slice(margin, -margin)
+            assert_allclose(
+                smoothed.values.value[interior],
+                ramp.values.value[interior],
+                atol=1e-9,
+            )
+
+
+def test_series_smoothing_is_the_filter_each_name_claims():
+    """BOX is an unweighted mean over the window, and the width of GAUSSIAN is a FWHM."""
+    rng = np.random.default_rng(7)
+    raw = 100.0 + rng.normal(0.0, 10.0, 801)
+    series = si.SolarIndexSeries(np.arange(801.0), raw * si.sfu)
+
+    smoothed = series.smoothed(81).values.value
+    for i in (100, 400, 700):
+        assert_allclose(smoothed[i], raw[i - 40 : i + 41].mean(), atol=1e-9)
+
+    # Gaussian1DKernel takes a standard deviation, so the FWHM is our conversion
+    kernel = si.SMOOTHING_KERNELS["gaussian"](80).array
+    centre = len(kernel) // 2
+    assert_allclose(kernel[centre + 40] / kernel[centre], 0.5, atol=1e-12)
+    assert_allclose(kernel[centre - 40] / kernel[centre], 0.5, atol=1e-12)
+
+
+def test_series_smoothing_takes_a_kernel_instance_but_says_it_cannot_be_written():
+    """Anything astropy can build is available, at the cost of serialisability."""
+    from astropy.convolution import Trapezoid1DKernel
+
+    rng = np.random.default_rng(3)
+    raw = 100.0 + rng.normal(0.0, 10.0, 401)
+    series = si.SolarIndexSeries(np.arange(401.0), raw * si.sfu, name="synthetic")
+
+    with pytest.warns(UserWarning, match="cannot be written to a par file"):
+        tapered = series.smoothed(81, Trapezoid1DKernel(81))
+
+    assert tapered.smooth_kernel == "Trapezoid1DKernel"
+    assert tapered.get_metadata()["smooth_kernel"] == "Trapezoid1DKernel"
+    assert tapered.values.std() < series.values.std() / 3
+    assert not np.allclose(tapered.values.value, series.smoothed(81).values.value)
+
+
+def test_series_smoothing_below_one_sample_is_a_no_op():
+    """astropy rejects a kernel narrower than a sample rather than passing it through."""
+    monthly = si.SolarIndexSeries(np.arange(0.0, 400.0, 30.0), np.arange(14.0) * si.sfu)
+    assert monthly.cadence_days == 30.0
+    for width in (0.0, 1.0, 7.0, 15.0):
+        assert monthly.smoothed(width) is monthly
+    assert monthly.smoothed(44) is monthly
+    assert monthly.smoothed(46).smooth_days == 46.0
 
 
 def test_series_metadata_records_what_was_read(drao):
@@ -360,8 +370,7 @@ def test_series_metadata_records_what_was_read(drao):
     assert prov["mjd_start"] == 53306.0
     assert prov["sha256"] == compute_hash(drao).hex()
     assert prov["retrieved"] is not None
-    # a smoothed series says so, so it cannot be mistaken for the raw record
-    assert (prov["smooth_days"], prov["smooth_kernel"]) == (0.0, "moving_average")
+    assert (prov["smooth_days"], prov["smooth_kernel"]) == (0.0, "box")
     smoothed = series.smoothed(81, kernel="gaussian").get_metadata()
     assert (smoothed["smooth_days"], smoothed["smooth_kernel"]) == (81.0, "gaussian")
 
@@ -369,16 +378,12 @@ def test_series_metadata_records_what_was_read(drao):
 def test_get_series_warns_when_the_unit_disagrees_with_its_source(drao, monkeypatch):
     """A series in unexpected units silently rescales a fitted coefficient.
 
-    ``SWPRBETA1`` is per proxy unit, so swapping a series for one in different
-    units changes what the coefficient means with nothing in the par file to show
-    it. Declaring the unit in SOURCES turns that into a warning.
+    ``SWPRBETA1`` is per proxy unit, so a series in different units changes what the
+    coefficient means with nothing in the par file to show it.
     """
     monkeypatch.setitem(si.SOURCES, "f107", si.SOURCES["f107"]._replace(unit=u.cm**-3))
     with pytest.warns(UserWarning, match="SOURCES declares"):
         si.get_series("f107", path=drao)
-
-
-# coverage
 
 
 def test_check_coverage_silent_when_contained():
@@ -408,9 +413,6 @@ def test_check_coverage_handles_empty_input():
         assert si.check_coverage([1.0, 2.0], []) == (0, 0)
 
 
-# network
-
-
 @pytest.mark.skipif(
     os.environ.get("PINT_TEST_NETWORK") != "1",
     reason="set PINT_TEST_NETWORK=1 to exercise the real downloads",
@@ -422,7 +424,6 @@ def test_live_download(name):
     assert np.all(np.diff(series.mjd) > 0)
     assert np.all(np.isfinite(series.values.value))
     assert series.unit == si.SOURCES[name].unit
-    # the metadata is what lets a result name exactly what it read
     assert series.sha256 and series.retrieved is not None
     # A second call must be served from the cache with no network.
     cached = si.get_series(name, download_policy="never")

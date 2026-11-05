@@ -35,12 +35,12 @@ When neither tier can supply the series, hand the arrays over directly with
 Examples
 --------
     >>> from pint import solar_indices
-    >>> mjd, flux = solar_indices.get_series("f107")
-    >>> mjd, ssn = solar_indices.get_series("ssn")
+    >>> f107 = solar_indices.get_series("f107")
+    >>> ssn = solar_indices.get_series("ssn")
 
     Offline, using only what is already cached::
 
-    >>> mjd, flux = solar_indices.get_series("f107", download_policy="never")
+    >>> f107 = solar_indices.get_series("f107", download_policy="never")
 """
 
 import json
@@ -53,9 +53,9 @@ from warnings import warn
 
 import astropy.units as u
 import numpy as np
+from astropy.convolution import Box1DKernel, Gaussian1DKernel, Kernel1D, convolve
 from astropy.table import Table
 from loguru import logger as log
-from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
 from pint.observatory.global_clock_corrections import get_file
 from pint.pulsar_mjd import Time
@@ -63,16 +63,16 @@ from pint.types import file_like, quantity_like, time_like
 from pint.utils import compute_hash
 
 __all__ = [
-    # the series object
+    # series
     "SolarIndexSeries",
-    # resolution and the series themselves
+    # resolution
     "get_series",
     "check_coverage",
     "SOURCES",
     "Source",
     "local_candidate",
     "pint_solar_env_var",
-    # parsers, usable directly on a file you already have
+    # parsers
     "parse_drao_f107",
     "parse_noaa",
     "parse_noaa_ssn",
@@ -84,8 +84,8 @@ __all__ = [
     "ACE_EPOCH_MJD",
     # smoothing
     "SMOOTHING_KERNELS",
-    "smooth_moving_average",
-    "smooth_gaussian",
+    "smooth",
+    "FWHM_PER_SIGMA",
     # units
     "sfu",
 ]
@@ -107,36 +107,47 @@ sfu = u.def_unit("sfu", 1e-22 * u.W / u.m**2 / u.Hz)
 FWHM_PER_SIGMA = float(np.sqrt(8.0 * np.log(2.0)))
 
 
-def smooth_moving_average(values: np.ndarray, window: int) -> np.ndarray:
-    """A centred moving average, equally weighting *window* samples.
-
-    The window is forced to an odd number of samples so that it is symmetric about
-    the sample it is evaluated at. Samples within half a window of either end are
-    averaged over a window padded with the endpoint value, so the smoothed series
-    is defined everywhere the raw one is.
-    """
-    return uniform_filter1d(values, size=window + 1 - window % 2, mode="nearest")
-
-
-def smooth_gaussian(values: np.ndarray, window: int) -> np.ndarray:
-    """A Gaussian-weighted mean whose full width at half maximum is *window* samples.
-
-    The width is the FWHM rather than the standard deviation so that it means
-    roughly the same thing as the width of :func:`smooth_moving_average`. The ends
-    are padded as there.
-    """
-    return gaussian_filter1d(values, sigma=window / FWHM_PER_SIGMA, mode="nearest")
-
-
-#: The smoothing functions :meth:`SolarIndexSeries.smoothed` can apply, by name.
-#: Each takes the sample values and an integer width in samples and returns an
-#: array of the same shape. Adding an entry here makes that kernel available to
-#: :meth:`SolarIndexSeries.smoothed` and selectable from a par file through
-#: ``SWPRSMOOTHKERNEL``.
-SMOOTHING_KERNELS: Dict[str, Callable[[np.ndarray, int], np.ndarray]] = {
-    "moving_average": smooth_moving_average,
-    "gaussian": smooth_gaussian,
+#: The kernels :meth:`SolarIndexSeries.smoothed` can apply, by name. Each entry
+#: builds an :class:`astropy.convolution.Kernel1D` from a width in samples. The names
+#: are the astropy class names without the ``1DKernel`` suffix, and are what
+#: ``SWPRSMOOTHKERNEL`` can hold. :meth:`SolarIndexSeries.smoothed` also takes a
+#: kernel instance directly, for anything not listed here.
+SMOOTHING_KERNELS: Dict[str, Callable[[int], Kernel1D]] = {
+    "box": Box1DKernel,
+    "gaussian": lambda window: Gaussian1DKernel(window / FWHM_PER_SIGMA),
 }
+
+
+def smooth(values: np.ndarray, kernel: Kernel1D) -> np.ndarray:
+    """Apply *kernel* to *values*, holding the endpoints beyond either end.
+
+    One application path for every kernel. ``boundary="extend"`` pads the series with
+    its own endpoint value, so the smoothed series is defined everywhere the raw one
+    is and does not taper toward zero at the ends; within half a kernel of either end
+    the result is partly an average of that padding.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Sample values, without units. ``convolve`` cannot take a Quantity in a
+        unit it does not know, such as :data:`sfu`.
+    kernel : astropy.convolution.Kernel1D
+
+    Returns
+    -------
+    numpy.ndarray
+        The same shape as *values*.
+    """
+    # Not astropy's defaults: unset, the ends decay toward zero and a missing sample
+    # is filled in rather than left missing.
+    return convolve(
+        values,
+        kernel,
+        boundary="extend",
+        nan_treatment="interpolate",
+        normalize_kernel=True,
+        preserve_nan=True,
+    )
 
 
 def mjd_from_ymd(yyyymmdd: Union[int, str]) -> int:
@@ -170,7 +181,7 @@ class SolarIndexSeries:
     methods, so a caller passes one self-contained object instead of two arrays and
     a convention.
 
-    This deliberately follows :class:`pint.observatory.clock_file.ClockFile`, which
+    This follows :class:`pint.observatory.clock_file.ClockFile`, which
     solves the same problem for clock corrections: validate on construction, expose
     the data through properties, and evaluate through a method that handles the ends
     of the record.
@@ -227,7 +238,7 @@ class SolarIndexSeries:
         sha256: Optional[str] = None,
         reference: Optional[str] = None,
         smooth_days: float = 0.0,
-        smooth_kernel: str = "moving_average",
+        smooth_kernel: str = "box",
     ):
         mjd = mjd.mjd if isinstance(mjd, Time) else np.asarray(mjd, dtype=float)
         value = u.Quantity(value)
@@ -251,8 +262,6 @@ class SolarIndexSeries:
         self.reference = reference
         self.smooth_days = float(smooth_days)
         self.smooth_kernel = smooth_kernel
-
-    # ── the data ──────────────────────────────────────────────────────────────
 
     @property
     def time(self) -> Time:
@@ -306,8 +315,6 @@ class SolarIndexSeries:
             f"{self.unit if self.unit != u.dimensionless_unscaled else 'dimensionless'}"
             f"{smooth}>"
         )
-
-    # ── evaluation ────────────────────────────────────────────────────────────
 
     def evaluate(
         self, mjd: time_like, limits: Literal["warn", "error"] = "warn"
@@ -363,7 +370,7 @@ class SolarIndexSeries:
         )
 
     def smoothed(
-        self, width_days: float, kernel: str = "moving_average"
+        self, width_days: float, kernel: Union[str, Kernel1D] = "box"
     ) -> "SolarIndexSeries":
         """A copy of this series smoothed over *width_days*.
 
@@ -372,12 +379,18 @@ class SolarIndexSeries:
         width_days : float
             Width of the smoothing window, in days. 0, or a width narrower than the
             sample spacing, returns the series unchanged.
-        kernel : str, optional
-            Which smoothing function to apply, a key of :data:`SMOOTHING_KERNELS`.
-            The default ``"moving_average"`` weights every sample in the window
-            equally; ``"gaussian"`` weights them by a Gaussian of that full width at
-            half maximum. See those functions for exactly what each computes,
-            including how the ends of the series are handled.
+        kernel : str or astropy.convolution.Kernel1D, optional
+            Either a key of :data:`SMOOTHING_KERNELS`, matched without regard to
+            case, or a kernel instance. ``"box"`` is
+            :class:`~astropy.convolution.Box1DKernel`, an unweighted mean over the
+            window, which is the F10.7A convention and the recommended choice for
+            F10.7; ``"gaussian"`` is :class:`~astropy.convolution.Gaussian1DKernel`
+            with *width_days* read as the full width at half maximum.
+
+            A kernel instance is built from a width in samples by the caller, so it
+            ignores *width_days* except for deciding whether to smooth at all, and it
+            cannot be written to a par file. :data:`SMOOTHING_KERNELS` is what
+            ``SWPRSMOOTHKERNEL`` can name.
 
         Returns
         -------
@@ -391,7 +404,8 @@ class SolarIndexSeries:
         :attr:`cadence_days`, so 81 days means 81 samples of a daily series and 3 of
         a monthly one. Without that conversion a monthly series smoothed with 81
         would be averaged over 81 months, erasing the solar cycle the series exists
-        to carry.
+        to carry. A fractional sample count is rounded, and astropy would snap it in
+        any case.
 
         Smoothing is applied here rather than stored, so the raw series is what gets
         cached and a change of width or kernel cannot silently redefine a fitted
@@ -399,13 +413,6 @@ class SolarIndexSeries:
         """
         if width_days <= 0 or len(self) < 2:
             return self
-        try:
-            smoother = SMOOTHING_KERNELS[kernel]
-        except KeyError:
-            raise ValueError(
-                f"Unknown smoothing kernel {kernel!r} for solar index series "
-                f"{self.name or '?'}; known: {sorted(SMOOTHING_KERNELS)}"
-            ) from None
         cadence = self.cadence_days
         window = int(round(width_days / cadence)) if cadence > 0 else 0
         if window > len(self):
@@ -415,14 +422,33 @@ class SolarIndexSeries:
                 f"only {len(self)}; the result will be nearly constant."
             )
         if window <= 1:
+            # astropy rejects a kernel narrower than a sample.
             return self
-        return self._with_values(
-            smoother(self._value.value, window) * self.unit,
-            smooth_days=width_days,
-            smooth_kernel=kernel,
-        )
 
-    # metadata
+        if isinstance(kernel, Kernel1D):
+            warn(
+                f"Smoothing {self.name or 'a solar index series'} with a kernel "
+                f"instance, {kernel.__class__.__name__}. A par file names a kernel "
+                f"through SWPRSMOOTHKERNEL and can only hold one of "
+                f"{sorted(SMOOTHING_KERNELS)}, so a model smoothed this way cannot "
+                "be written to a par file or rebuilt from one."
+            )
+            applied, label = kernel, type(kernel).__name__
+        else:
+            try:
+                applied = SMOOTHING_KERNELS[kernel.lower()](window)
+            except KeyError:
+                raise ValueError(
+                    f"Unknown smoothing kernel {kernel!r} for solar index series "
+                    f"{self.name or '?'}; known: {sorted(SMOOTHING_KERNELS)}"
+                ) from None
+            label = kernel.lower()
+
+        return self._with_values(
+            smooth(self._value.value, applied) * self.unit,
+            smooth_days=width_days,
+            smooth_kernel=label,
+        )
 
     def get_metadata(self) -> Dict[str, Any]:
         """Everything needed to say which snapshot of the series was used.
@@ -464,9 +490,6 @@ class SolarIndexSeries:
         return SolarIndexSeries(self.mjd, value, **fields)
 
 
-# parsers -- each returns (mjd, value), sorted by mjd, with missing data removed.
-
-
 def parse_drao_f107(path: file_like, column: str = "fluxadjflux") -> SolarIndexSeries:
     """Daily F10.7 from the DRAO/Penticton ``fluxtable.txt``.
 
@@ -492,8 +515,7 @@ def parse_drao_f107(path: file_like, column: str = "fluxadjflux") -> SolarIndexS
     ----------
     - Tapping, K. F. (2013), The 10.7 cm solar radio flux (F10.7), Space Weather, 11, 394-406, doi:10.1002/swe.20064.
     """
-    # The table is a two-line header (names, then a row of dashes) over
-    # fixed-width columns, which astropy reads directly.
+    # A two-line header, names then a row of dashes, over fixed-width columns.
     try:
         table = Table.read(path, format="ascii.fixed_width_two_line")
     except Exception as e:
@@ -646,9 +668,6 @@ def parse_ace_density(path: file_like) -> SolarIndexSeries:
     )
 
 
-# Sources
-
-
 class Source(NamedTuple):
     """Where one series comes from and how to read it.
 
@@ -782,6 +801,8 @@ def get_series(
         recorded. Use :meth:`SolarIndexSeries.evaluate` to interpolate it and
         :meth:`SolarIndexSeries.get_metadata` to record what was read.
     """
+    # SWPRSOURCE is upper case in a par file; SOURCES is keyed in lower case.
+    name = name.lower()
     if name not in SOURCES:
         raise KeyError(f"unknown series {name!r}; known: {sorted(SOURCES)}")
     source = SOURCES[name]
@@ -818,8 +839,7 @@ def get_series(
                 f"Could not obtain solar index {name} from {source.url_base}: {e}"
             )
 
-    # Nothing is bundled with PINT, by design; see the module docstring. A series
-    # that neither tier can supply is passed to set_proxy() by hand instead.
+    # Nothing is bundled with PINT; see the module docstring.
     hint = (
         f" There is no automatic download for {name}; export it and pass it as "
         f"path=, put it in ${pint_solar_env_var}, or hand the arrays to "
