@@ -277,7 +277,7 @@ print(
 # | `SWPRBETA1` | cm$^{-3}$ per proxy unit | slope |
 # | `SWPRLAG` | day | lag applied to the proxy before interpolation |
 # | `SWPRSMOOTH` | day | width of the smoothing applied to the proxy, default 81 |
-# | `SWPRSMOOTHKERNEL` | - | which kernel, a key of `pint.solar_indices.SMOOTHING_KERNELS` (`BOX`, `GAUSSIAN`) |
+# | `SWPRSMOOTHKERNEL` | - | which kernel, a key of `pint.solar_indices.SMOOTHING_KERNELS` |
 # | `SWPRSOURCE` | - | which series to use, a key of `pint.solar_indices.SOURCES` |
 # | `SWM`, `SWP` | - | geometry, same meaning as in the standard model |
 #
@@ -344,12 +344,13 @@ print(
 # cycle in the data.
 #
 # `SWPRSMOOTHKERNEL` names the kernel itself, an entry of
-# `pint.solar_indices.SMOOTHING_KERNELS`. The entries are
+# `pint.solar_indices.SMOOTHING_KERNELS`, built from
 # [astropy convolution kernels](https://docs.astropy.org/en/stable/convolution/):
-# `BOX` is `Box1DKernel`, an unweighted mean over the window, and `GAUSSIAN` is
-# `Gaussian1DKernel` with `SWPRSMOOTH` read as the full width at half maximum. Both
-# parameters go in the par file, because `SWPRBETA1` is defined against the smoothed
-# proxy and changing either one redefines it.
+# `BOX` is an unweighted mean, `GAUSSIAN`, `TRIANGLE` and `HANN` are tapered, and
+# `TRAPEZOID` keeps a flat top over three quarters of the width. `SWPRSMOOTH` is the
+# full width at half maximum for all of them, so they are comparable at one width.
+# Both parameters go in the par file, because `SWPRBETA1` is defined against the
+# smoothed proxy and changing either one redefines it.
 
 # %%
 try:
@@ -386,41 +387,37 @@ print(
 print("any astropy Kernel1D also works from Python, but a par file cannot name it")
 
 if "f107" in dir():
-    widths = (27, 81, 365)
     fig, axes = plt.subplots(2, 1, figsize=(16, 8))
-    spans = (
-        (f107.mjd.min(), f107.mjd.max(), "the whole record"),
-        (57500, 58230, "two years on the cycle-24 decline"),
+
+    # top: one kernel, several widths, over the whole record
+    lo, hi = f107.mjd.min(), f107.mjd.max()
+    inside = (f107.mjd >= lo) & (f107.mjd <= hi)
+    axes[0].plot(f107.mjd, f107.values.value, color="0.8", lw=0.6, label="raw")
+    for width in (27, 81, 365):
+        box = f107.smoothed(width)
+        axes[0].plot(box.mjd, box.values.value, lw=1.4, label=f"BOX, {width} d")
+    axes[0].set_xlim(lo, hi)
+    axes[0].set_title("one kernel, several widths")
+
+    # bottom: every kernel at the same width, where the width is the FWHM
+    lo, hi = 57500, 58230
+    inside = (f107.mjd >= lo) & (f107.mjd <= hi)
+    axes[1].plot(
+        f107.mjd[inside], f107.values.value[inside], color="0.8", lw=0.7, label="raw"
     )
-    for ax, (lo, hi, label) in zip(axes, spans):
-        inside = (f107.mjd >= lo) & (f107.mjd <= hi)
-        ax.plot(
-            f107.mjd[inside],
-            f107.values.value[inside],
-            color="0.8",
-            lw=0.7,
-            label="raw",
+    for name in sorted(solar_indices.SMOOTHING_KERNELS):
+        series = f107.smoothed(81, name)
+        axes[1].plot(
+            series.mjd[inside], series.values.value[inside], lw=1.4, label=name.upper()
         )
-        for width in widths:
-            box = f107.smoothed(width)
-            ax.plot(
-                box.mjd[inside],
-                box.values.value[inside],
-                lw=1.4,
-                label=f"BOX, {width} d",
-            )
-        gaussian = f107.smoothed(81, "gaussian")
-        ax.plot(
-            gaussian.mjd[inside],
-            gaussian.values.value[inside],
-            "k--",
-            lw=1.2,
-            label="GAUSSIAN, 81 d",
-        )
-        ax.set_xlim(lo, hi)
+    axes[1].set_xlim(lo, hi)
+    axes[1].set_title(
+        "every kernel at SWPRSMOOTH = 81 d, two years on the cycle-24 decline"
+    )
+
+    for ax in axes:
         ax.set_ylabel(f"F10.7 [{f107.unit}]")
-        ax.set_title(label)
-        ax.legend(ncol=5, fontsize=9)
+        ax.legend(ncol=6, fontsize=9)
     axes[-1].set_xlabel("MJD")
     plt.tight_layout()
 else:
@@ -432,8 +429,10 @@ else:
 # smoothed proxy is the same quantity the literature means by smoothed F10.7, and
 # `SWPRBETA1` is comparable with a published value.
 #
-# `GAUSSIAN` at the same width suppresses the rotation more sharply, because a flat
-# window has sidelobes in frequency and a Gaussian does not. Reach for it when the
+# The tapered kernels suppress the solar rotation more sharply at the same width,
+# because a flat window has sidelobes in frequency and a tapered one does not, and
+# they give up a little more of the cycle in exchange. The ordering on both counts is
+# `BOX`, `TRAPEZOID`, `TRIANGLE`, `HANN`, `GAUSSIAN`. Reach for one of them when the
 # frequency response matters more than matching the convention.
 #
 # The convention is per series, not universal: the published smoothing for the monthly

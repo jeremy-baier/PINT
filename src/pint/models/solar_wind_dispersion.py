@@ -1364,9 +1364,12 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
     ----------------------
     For F10.7, use the defaults: ``SWPRSMOOTHKERNEL BOX`` with ``SWPRSMOOTH 81``, an
     unweighted 81 day mean. That is the F10.7A convention, so the smoothed proxy is
-    the same quantity the literature means by smoothed F10.7. ``GAUSSIAN`` suppresses
-    the solar rotation more sharply at the same width and is the better choice when
-    the frequency response matters more than matching the convention. Note the
+    the same quantity the literature means by smoothed F10.7.
+
+    The other entries of :data:`~pint.solar_indices.SMOOTHING_KERNELS` taper, which
+    suppresses the solar rotation more sharply at the same width while giving up a
+    little more of the cycle. ``SWPRSMOOTH`` is the full width at half maximum for
+    every kernel, so changing only the name is a like-for-like comparison. Note the
     convention is per series: the published one for the monthly sunspot number is a
     tapered 13 month mean, which is a different filter and is not offered here.
 
@@ -1393,9 +1396,22 @@ class SolarWindProxyRegression(SolarWindDispersionBase):
 
     References
     ----------
-    - Edwards et al. 2006, MNRAS, 372, 1549
-    - Hazboun et al. 2022, ApJ, 929, 39
+    The solar wind model and its use in pulsar timing:
+
+    - Edwards, R. T., Hobbs, G. B., & Manchester, R. N. 2006, MNRAS, 372, 1549,
+      doi:10.1111/j.1365-2966.2006.10870.x
+    - Hazboun, J. S., Simon, J., Madison, D. R., et al. 2022, ApJ, 929, 39,
+      doi:10.3847/1538-4357/ac5829
     - Larsen, Baier et al. 2026
+
+    The default proxy, and the smoothing recommended for it:
+
+    - Tapping, K. F. 2013, Space Weather, 11, 394, doi:10.1002/swe.20064
+    - Picone, J. M., Hedin, A. E., Drob, D. P., & Aikin, A. C. 2002, JGR, 107,
+      A12, doi:10.1029/2002JA009430, which takes F10.7A, the 81 day centred
+      average, as an input alongside the daily value
+
+    See :mod:`pint.solar_indices` for the other series and where each is obtained.
     """
 
     register = True

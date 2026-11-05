@@ -41,6 +41,35 @@ Examples
     Offline, using only what is already cached::
 
     >>> f107 = solar_indices.get_series("f107", download_policy="never")
+
+    Smoothed to the conventional F10.7A window::
+
+    >>> f107a = solar_indices.get_series("f107").smoothed(81, "box")
+
+References
+----------
+``f107``, the 10.7 cm solar radio flux:
+
+- Tapping, K. F. 2013, Space Weather, 11, 394, doi:10.1002/swe.20064
+- Measured at the Dominion Radio Astrophysical Observatory, Penticton, and
+  distributed by Space Weather Canada:
+  https://www.spaceweather.gc.ca/forecast-prevision/solar-solaire/solarflux/sx-en.php
+
+``ssn``, the international sunspot number:
+
+- Clette, F., Svalgaard, L., Vaquero, J. M., & Cliver, E. W. 2014,
+  Space Science Reviews, 186, 35, doi:10.1007/s11214-014-0074-2
+- Produced by SILSO, Royal Observatory of Belgium, https://www.sidc.be/SILSO/,
+  and read here from the NOAA SWPC solar-cycle indices file.
+
+``ace_density``, solar wind proton density from ACE SWEPAM:
+
+- McComas, D. J., Bame, S. J., Barker, P., et al. 1998, Space Science Reviews,
+  86, 563, doi:10.1023/A:1005040232597
+- Stone, E. C., Frandsen, A. M., Mewaldt, R. A., et al. 1998, Space Science
+  Reviews, 86, 1, doi:10.1023/A:1005082526237
+- Level 2 data from the ACE Science Center:
+  https://izw1.caltech.edu/ACE/ASC/level2/lvl2DATA_SWEPAM.html
 """
 
 import json
@@ -53,7 +82,14 @@ from warnings import warn
 
 import astropy.units as u
 import numpy as np
-from astropy.convolution import Box1DKernel, Gaussian1DKernel, Kernel1D, convolve
+from astropy.convolution import (
+    Box1DKernel,
+    CustomKernel,
+    Gaussian1DKernel,
+    Kernel1D,
+    Trapezoid1DKernel,
+    convolve,
+)
 from astropy.table import Table
 from loguru import logger as log
 
@@ -86,6 +122,7 @@ __all__ = [
     "SMOOTHING_KERNELS",
     "smooth",
     "FWHM_PER_SIGMA",
+    "odd",
     # units
     "sfu",
 ]
@@ -100,21 +137,34 @@ ACE_EPOCH_MJD = date(1996, 1, 1).toordinal() - MJD_ORDINAL_OFFSET
 
 # The solar flux unit, the conventional unit of F10.7, which astropy does not
 # define. 1 sfu = 1e-22 W m^-2 Hz^-1 = 1e4 Jy.
-# see Tapping 2013: doi:10.1002/swe.20064.
+# Tapping 2013, Space Weather, 11, 394, doi:10.1002/swe.20064
 sfu = u.def_unit("sfu", 1e-22 * u.W / u.m**2 / u.Hz)
 
 # Full width at half maximum of a Gaussian, in units of its standard deviation.
 FWHM_PER_SIGMA = float(np.sqrt(8.0 * np.log(2.0)))
 
 
-#: The kernels :meth:`SolarIndexSeries.smoothed` can apply, by name. Each entry
-#: builds an :class:`astropy.convolution.Kernel1D` from a width in samples. The names
-#: are the astropy class names without the ``1DKernel`` suffix, and are what
-#: ``SWPRSMOOTHKERNEL`` can hold. :meth:`SolarIndexSeries.smoothed` also takes a
-#: kernel instance directly, for anything not listed here.
+def odd(n: float) -> int:
+    """*n* rounded up to an odd sample count, which ``CustomKernel`` requires."""
+    return int(n) + 1 - int(n) % 2
+
+
+#: The kernels :meth:`SolarIndexSeries.smoothed` can apply, by name. Each entry builds
+#: an :class:`astropy.convolution.Kernel1D` whose full width at half maximum is the
+#: width in samples it is given, so one ``SWPRSMOOTH`` means the same window for every
+#: kernel. These names are what ``SWPRSMOOTHKERNEL`` can hold;
+#: :meth:`SolarIndexSeries.smoothed` also takes a kernel instance directly, for
+#: anything not listed here.
+#:
+#: ``box`` is the F10.7A convention and the right default for F10.7. The others taper,
+#: which removes the sidelobes a flat window has in frequency, ``gaussian`` most
+#: sharply. ``trapezoid`` keeps a flat top over three quarters of the width.
 SMOOTHING_KERNELS: Dict[str, Callable[[int], Kernel1D]] = {
     "box": Box1DKernel,
     "gaussian": lambda window: Gaussian1DKernel(window / FWHM_PER_SIGMA),
+    "trapezoid": lambda window: Trapezoid1DKernel(0.75 * window, slope=4.0 / window),
+    "triangle": lambda window: CustomKernel(np.bartlett(odd(2 * window))),
+    "hann": lambda window: CustomKernel(np.hanning(odd(2 * window))),
 }
 
 
@@ -381,11 +431,11 @@ class SolarIndexSeries:
             sample spacing, returns the series unchanged.
         kernel : str or astropy.convolution.Kernel1D, optional
             Either a key of :data:`SMOOTHING_KERNELS`, matched without regard to
-            case, or a kernel instance. ``"box"`` is
-            :class:`~astropy.convolution.Box1DKernel`, an unweighted mean over the
+            case, or a kernel instance. ``"box"`` is an unweighted mean over the
             window, which is the F10.7A convention and the recommended choice for
-            F10.7; ``"gaussian"`` is :class:`~astropy.convolution.Gaussian1DKernel`
-            with *width_days* read as the full width at half maximum.
+            F10.7; ``"gaussian"``, ``"trapezoid"``, ``"triangle"`` and ``"hann"``
+            taper instead. *width_days* is the full width at half maximum for all
+            of them, so they are comparable at the same width.
 
             A kernel instance is built from a width in samples by the caller, so it
             ignores *width_days* except for deciding whether to smooth at all, and it

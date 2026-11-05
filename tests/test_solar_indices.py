@@ -274,7 +274,13 @@ def test_series_smoothing_kernel_is_named_and_selectable():
     noisy = 100.0 + rng.normal(0.0, 10.0, 401)
     series = si.SolarIndexSeries(np.arange(401.0), noisy * si.sfu, name="synthetic")
 
-    assert set(si.SMOOTHING_KERNELS) >= {"box", "gaussian"}
+    assert set(si.SMOOTHING_KERNELS) == {
+        "box",
+        "gaussian",
+        "trapezoid",
+        "triangle",
+        "hann",
+    }
     box = series.smoothed(81)
     gaussian = series.smoothed(81, kernel="gaussian")
 
@@ -305,8 +311,8 @@ def test_series_smoothing_window_is_centred():
     # evaluated at, which Box1DKernel is at even widths too
     for width in (10, 11, 50, 81):
         for kernel in sorted(si.SMOOTHING_KERNELS):
-            # the Gaussian's support is several sigma, not one FWHM
-            margin = width if kernel == "box" else 4 * width
+            # support is wider than the FWHM for every kernel but the box
+            margin = len(si.SMOOTHING_KERNELS[kernel](width).array) // 2 + 1
             smoothed = ramp.smoothed(width, kernel)
             interior = slice(margin, -margin)
             assert_allclose(
@@ -331,6 +337,21 @@ def test_series_smoothing_is_the_filter_each_name_claims():
     centre = len(kernel) // 2
     assert_allclose(kernel[centre + 40] / kernel[centre], 0.5, atol=1e-12)
     assert_allclose(kernel[centre - 40] / kernel[centre], 0.5, atol=1e-12)
+
+
+def test_series_smoothing_width_is_a_fwhm_for_every_kernel():
+    """One SWPRSMOOTH means the same window whichever kernel is named."""
+    for name, build in sorted(si.SMOOTHING_KERNELS.items()):
+        for width in (27, 81, 365):
+            kernel = np.asarray(build(width).array, dtype=float)
+            assert len(kernel) % 2 == 1, name
+            centre = (len(kernel) - 1) / 2
+            half = kernel.max() / 2
+            right = np.arange(int(np.ceil(centre)), len(kernel))
+            edge = np.interp(half, kernel[right][::-1], right[::-1])
+            # a discrete flat top reads one sample narrow at the half maximum
+            assert abs(2 * (edge - centre) - width) <= 1.0, (name, width)
+            assert_allclose(kernel, kernel[::-1], atol=1e-12)
 
 
 def test_series_smoothing_takes_a_kernel_instance_but_says_it_cannot_be_written():
